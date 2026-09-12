@@ -67,3 +67,9 @@ managed/
 web/node_modules/
 web/dist/
 web/public/zk/
+
+# NightPot web build artifacts
+web/public/keys/
+web/public/zkir/
+web/src/generated/
+web/.vite/

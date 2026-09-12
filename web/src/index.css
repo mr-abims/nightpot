@@ -1,0 +1,74 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/*
+ * One palette, two modes. Neutrals are cool ink; the single accent is marigold,
+ * the colour of the coin in the pot. Radius rule: surfaces 16px, controls pill.
+ */
+@theme inline {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, monospace;
+
+  --color-bg: var(--np-bg);
+  --color-surface: var(--np-surface);
+  --color-raised: var(--np-raised);
+  --color-line: var(--np-line);
+  --color-ink: var(--np-ink);
+  --color-muted: var(--np-muted);
+  --color-accent: var(--np-accent);
+  --color-accent-ink: var(--np-accent-ink);
+  --color-accent-soft: var(--np-accent-soft);
+}
+
+:root {
+  --np-bg: #f5f6f8;
+  --np-surface: #ffffff;
+  --np-raised: #e9edf2;
+  --np-line: #d7dde5;
+  --np-ink: #10151c;
+  --np-muted: #4b5563;
+  --np-accent: #b7781a;
+  --np-accent-ink: #10151c;
+  --np-accent-soft: #f4e4c6;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --np-bg: #0a0e14;
+    --np-surface: #111722;
+    --np-raised: #182131;
+    --np-line: #253146;
+    --np-ink: #e8ecf2;
+    --np-muted: #9ba7b8;
+    --np-accent: #f0b44c;
+    --np-accent-ink: #0a0e14;
+    --np-accent-soft: #2b2214;
+    color-scheme: dark;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--np-bg);
+  color: var(--np-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--np-accent);
+  outline-offset: 3px;
+}

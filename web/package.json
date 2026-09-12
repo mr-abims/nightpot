@@ -1,0 +1,50 @@
+{
+  "name": "nightpot-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "npm run zk:assets && vite",
+    "build": "npm run zk:assets && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "zk:assets": "node scripts/copy-zk-assets.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "5.3.0",
+    "@fontsource-variable/geist-mono": "5.3.0",
+    "@midnight-ntwrk/compact-js": "^2.5.1",
+    "@midnight-ntwrk/compact-runtime": "^0.16.0",
+    "@midnight-ntwrk/dapp-connector-api": "^4.0.1",
+    "@midnight-ntwrk/ledger-v8": "^8.1.0",
+    "@midnight-ntwrk/midnight-js-contracts": "^4.1.1",
+    "@midnight-ntwrk/midnight-js-dapp-connector-proof-provider": "^4.1.1",
+    "@midnight-ntwrk/midnight-js-fetch-zk-config-provider": "^4.1.1",
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "^4.1.1",
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "^4.1.1",
+    "@midnight-ntwrk/midnight-js-network-id": "^4.1.1",
+    "@midnight-ntwrk/midnight-js-protocol": "^4.1.1",
+    "@midnight-ntwrk/midnight-js-types": "^4.1.1",
+    "@midnight-ntwrk/midnight-js-utils": "^4.1.1",
+    "@phosphor-icons/react": "2.1.10",
+    "buffer": "^6.0.3",
+    "motion": "13.3.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router-dom": "7.18.3",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "tailwindcss": "4.3.3",
+    "typescript": "^6.0.3",
+    "vite": "8.3.0",
+    "vite-plugin-wasm": "^3.6.0"
+  },
+  "overrides": {
+    "@midnight-ntwrk/onchain-runtime-v3": "3.0.0"
+  }
+}
