@@ -1,0 +1,185 @@
+// ─────────────────────────────────────────────────────────────────────────────
+//  NightPot — a private rotating savings pot (ajo / esusu / chama / tanda / susu)
+//
+//  A fixed group pays the same amount every round; each round one member takes
+//  the whole pot; the rotation continues until everyone has had a turn.
+//
+//  WHAT IS PUBLIC (ledger):
+//    • pot parameters (size, contribution, token), phase, round, how many
+//      members have paid this round, and the pot coin itself.
+//    • member leaves — hidden on insert into the HistoricMerkleTree.
+//    • nullifiers — one-way tags that stop double contributions and double
+//      payouts without saying who produced them.
+//
+//  WHAT IS PRIVATE (witnesses, never leave the member's device):
+//    • memberSecret() — the member's 32-byte secret.
+//    • memberSlot()   — which turn in the rotation belongs to the member.
+//    • memberPath()   — the Merkle path proving the member's leaf is in the pot.
+//
+//  WHAT A MEMBER PROVES WITHOUT REVEALING IT:
+//    "I am one of this pot's members" (contribute), and
+//    "I am the member whose turn it is" (claimPayout).
+//
+//  SEAMS FOR LATER WAVES:
+//    • Slot assignment lives only in join()   → Wave 2 commit-reveal fair order.
+//    • Nullifier domains are versioned (v1)    → Wave 2 collateral + default marks,
+//                                                Wave 3 completion credentials.
+// ─────────────────────────────────────────────────────────────────────────────
+
+pragma language_version >= 0.23;
+
+import CompactStandardLibrary;
+
+export enum Phase { forming, active, completed }
+
+// ─── Public ledger state ─────────────────────────────────────────────────────
+
+export ledger phase: Phase;
+export sealed ledger maxMembers: Uint<16>;
+export sealed ledger contribution: Uint<64>;
+// Set when the pot activates. It cannot be computed in the constructor: the
+// contract address is derived from the deploy transaction, so kernel.self()
+// is not yet the final address there.
+export ledger potColor: Bytes<32>;
+
+export ledger members: HistoricMerkleTree<10, Bytes<32>>;
+export ledger memberCount: Uint<16>;
+export ledger round: Uint<16>;
+export ledger paidThisRound: Uint<16>;
+
+export ledger contributions: Set<Bytes<32>>;
+export ledger payouts: Set<Bytes<32>>;
+
+export ledger pot: QualifiedShieldedCoinInfo;
+export ledger potHasCoin: Boolean;
+
+// Test-token faucet (Wave 1 only, so judges can try the pot without a real asset).
+export ledger mintNonce: Bytes<32>;
+export ledger mintCount: Counter;
+
+// ─── Private witnesses ───────────────────────────────────────────────────────
+
+witness memberSecret(): Bytes<32>;
+witness memberSlot(): Uint<16>;
+witness memberPath(leaf: Bytes<32>): MerkleTreePath<10, Bytes<32>>;
+
+// ─── Constructor ─────────────────────────────────────────────────────────────
+
+constructor(size: Uint<16>, amount: Uint<64>, nonceSeed: Bytes<32>) {
+  assert(size >= 2, "NightPot: a pot needs at least two members");
+  assert(size <= 64, "NightPot: a pot can have at most 64 members");
+  assert(amount > 0, "NightPot: contribution must be positive");
+  maxMembers = disclose(size);
+  contribution = disclose(amount);
+  phase = Phase.forming;
+  memberCount = 0;
+  round = 0;
+  paidThisRound = 0;
+  potHasCoin = false;
+  mintNonce = disclose(nonceSeed);
+}
+
+// ─── Circuits ────────────────────────────────────────────────────────────────
+
+// Mint one contribution's worth of the pot's test token to the caller.
+export circuit mintTestTokens(): ShieldedCoinInfo {
+  mintCount.increment(1);
+  const nonce = evolveNonce(mintCount.read() as Uint<128>, mintNonce);
+  mintNonce = nonce;
+  return mintShieldedToken(
+    pad(32, "nightpot:tpot"),
+    contribution,
+    nonce,
+    left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey())
+  );
+}
+
+// Take the next free slot. The leaf commits to (secret, slot) and is hidden
+// on insert, so the ledger never learns who holds which turn.
+export circuit join(): [] {
+  assert(phase == Phase.forming, "NightPot: pot is not accepting members");
+  const slot = memberCount;
+  members.insert(disclose(memberLeaf(memberSecret(), slot)));
+  memberCount = (memberCount + 1) as Uint<16>;
+  if (memberCount == maxMembers) {
+    phase = Phase.active;
+    potColor = tokenType(pad(32, "nightpot:tpot"), kernel.self());
+  }
+}
+
+// Pay this round's contribution into the pot, anonymously.
+export circuit contribute(coin: ShieldedCoinInfo): [] {
+  assert(phase == Phase.active, "NightPot: pot is not active");
+  const sk = memberSecret();
+  proveMembership(sk, memberSlot());
+
+  const nul = contributionNullifier(sk, round, kernel.self().bytes);
+  assert(!contributions.member(disclose(nul)), "NightPot: already contributed this round");
+  assert(disclose(coin.color == potColor), "NightPot: wrong token");
+  assert(disclose(coin.value == contribution as Uint<128>), "NightPot: wrong contribution amount");
+
+  contributions.insert(disclose(nul));
+  receiveShielded(disclose(coin));
+  if (!potHasCoin) {
+    pot.writeCoin(disclose(coin), right<ZswapCoinPublicKey, ContractAddress>(kernel.self()));
+    potHasCoin = true;
+  } else {
+    pot.writeCoin(
+      mergeCoinImmediate(pot, disclose(coin)),
+      right<ZswapCoinPublicKey, ContractAddress>(kernel.self())
+    );
+  }
+  paidThisRound = (paidThisRound + 1) as Uint<16>;
+}
+
+// The member whose turn it is pulls the full pot to their own shielded key.
+export circuit claimPayout(): ShieldedCoinInfo {
+  assert(phase == Phase.active, "NightPot: pot is not active");
+  assert(paidThisRound == maxMembers, "NightPot: round is not fully funded");
+  const sk = memberSecret();
+  proveMembership(sk, round);
+
+  const nul = payoutNullifier(sk, round, kernel.self().bytes);
+  assert(!payouts.member(disclose(nul)), "NightPot: payout already claimed");
+  payouts.insert(disclose(nul));
+
+  const result = sendShielded(pot, left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey()), pot.value);
+  potHasCoin = false;
+  paidThisRound = 0;
+  if (round + 1 == maxMembers) {
+    phase = Phase.completed;
+  } else {
+    round = (round + 1) as Uint<16>;
+  }
+  return result.sent;
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+circuit proveMembership(sk: Bytes<32>, slot: Uint<16>): [] {
+  const leaf = memberLeaf(sk, slot);
+  const path = memberPath(leaf);
+  assert(disclose(path.leaf == leaf), "NightPot: membership proof is for a different member");
+  assert(
+    members.checkRoot(disclose(merkleTreePathRoot<10, Bytes<32>>(path))),
+    "NightPot: not a member of this pot"
+  );
+}
+
+export circuit memberLeaf(sk: Bytes<32>, slot: Uint<16>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>(
+    [pad(32, "nightpot:member:v1"), sk, (slot as Field) as Bytes<32>]
+  );
+}
+
+export circuit contributionNullifier(sk: Bytes<32>, r: Uint<16>, potId: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<4, Bytes<32>>>(
+    [pad(32, "nightpot:contrib:v1"), potId, (r as Field) as Bytes<32>, sk]
+  );
+}
+
+export circuit payoutNullifier(sk: Bytes<32>, r: Uint<16>, potId: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<4, Bytes<32>>>(
+    [pad(32, "nightpot:payout:v1"), potId, (r as Field) as Bytes<32>, sk]
+  );
+}
