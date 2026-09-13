@@ -25,10 +25,29 @@ NightPot is a new project in Wave 1. Everything below was built during this wave
   NightPot pins compiler 0.31.1 so the contract deploys with the stable SDK.
 - The browser bundle must resolve a single `onchain-runtime-v3`; `web/package.json` pins it with an override.
 
+## End-to-end run on a local Midnight devnet
+
+`npm run devnet:up && npm run spike:local` deploys a 2-member pot and runs the full money path with shielded tokens.
+Contract `97cf6f8bb7599daf612d9474d8902e53e747f01a886b39ab12f465bda9d7de0f`. Full transaction ids in [`docs/devnet-run.json`](devnet-run.json).
+
+| Step | Block | Transaction | Time |
+|------|-------|-------------|------|
+| deploy 2-member pot | 42 | `009b50181e31d4b1c6…` | 18s |
+| join as member-0 | 46 | `009cceebc0158e99d6…` | 24s |
+| join as member-1 | 49 | `00501914bc458d612a…` | 17s |
+| mintTestTokens for member-0 | 52 | `008acf9bb75b56abaa…` | 19s |
+| mintTestTokens for member-1 | 56 | `004691ce8d3b0972a8…` | 24s |
+| contribute as member-0 | 61 | `00571e0635fb311904…` | 29s |
+| contribute as member-1 | 66 | `006ad04bd83063f69c…` | 31s |
+| claimPayout as member-0 (slot 0) | 70 | `00fa474a99364ced54…` | 24s |
+
+After the claim the pot is empty, the round advanced to 1, and the claimant's wallet holds the 200 pot tokens it paid
+in. This proves shielded contributions (`receiveShielded` + `mergeCoinImmediate`) and the pull payout (`sendShielded`
+to the caller's own key) work on a real node, indexer, and proof server.
+
 ## Preprod
 
-<!-- Fill in after the end-to-end run: contract address and transaction ids for deploy, join, mint, contribute, claim. -->
-Pending.
+Pending: a fresh Node wallet sync against Preprod takes hours, so the Preprod run uses the Lace app (already synced).
 
 ## Next (Wave 2)
 

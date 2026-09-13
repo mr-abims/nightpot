@@ -108,6 +108,15 @@ npm run dev            # copies compiled keys into public/, then starts Vite on 
 Open `http://localhost:5173/app`, connect Lace on Preprod, create a pot, take a seat, mint test tokens, pay in, and
 take the pot when it is your turn. Lace's configured prover generates the proofs.
 
+### Run the end-to-end script on a local devnet (minutes)
+
+```bash
+npm run devnet:up      # node, indexer, proof server in Docker
+npm run spike:local    # deploy, join x2, mint x2, pay in x2, take the pot
+```
+
+A recorded run is in [`docs/devnet-run.json`](docs/devnet-run.json): 8 transactions, each confirmed in 17 to 31 seconds.
+
 ### Run the end-to-end script on Preprod
 
 ```bash
