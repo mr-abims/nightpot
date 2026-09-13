@@ -73,3 +73,6 @@ web/public/keys/
 web/public/zkir/
 web/src/generated/
 web/.vite/
+
+# Contract work-in-progress while the Preprod run uses managed/
+.dev-dl/

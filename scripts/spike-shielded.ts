@@ -128,7 +128,8 @@ async function main(): Promise<void> {
   const deployed: any = await step('deploy 2-member pot', () =>
     deployContract(providers, {
       compiledContract: compiledContract as any,
-      args: [POT_SIZE, CONTRIBUTION, Uint8Array.from(randomBytes(32))],
+      // Seats must fill within two hours; each round lasts an hour.
+      args: [POT_SIZE, CONTRIBUTION, Uint8Array.from(randomBytes(32)), BigInt(Math.floor(Date.now() / 1000) + 2 * 3600), 3600n],
       privateStateId: PRIVATE_STATE_ID,
       initialPrivateState: createNightPotPrivateState(members[0].secretKey, 0n) as NightPotPrivateState,
     }),

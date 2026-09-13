@@ -1,16 +1,17 @@
 /**
  * Tests for the NightPot contract.
  *
- * Three things are worth proving about a private savings pot:
+ * Four things are worth proving about a private savings pot:
  *   1. the rotation works end to end and every rule is enforced (logic),
  *   2. the public ledger evolves correctly round by round (state),
- *   3. member secrets and slots never reach public state (privacy).
+ *   3. one member who stops paying cannot freeze everyone (schedule),
+ *   4. member secrets and slots never reach public state (privacy).
  */
 import { Buffer } from 'node:buffer';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { Phase } from '../managed/nightpot/contract/index.js';
-import { NightPotSimulator, member, type Member } from './nightpot-simulator.js';
+import { JOIN_WINDOW, NightPotSimulator, ROUND_SECONDS, T0, member, type Member } from './nightpot-simulator.js';
 
 const CONTRIBUTION = 100n;
 const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
@@ -37,15 +38,19 @@ const activePot = (): NightPotSimulator => {
 };
 
 describe('constructor', () => {
-  it('opens a forming pot with the chosen size and contribution', () => {
+  it('opens a forming pot with the chosen size, contribution, and schedule', () => {
     const state = new NightPotSimulator(3n, CONTRIBUTION).getLedger();
 
     expect(state.phase).toEqual(Phase.forming);
     expect(state.maxMembers).toEqual(3n);
     expect(state.contribution).toEqual(CONTRIBUTION);
+    expect(state.joinDeadline).toEqual(T0 + JOIN_WINDOW);
+    expect(state.roundLength).toEqual(ROUND_SECONDS);
     expect(state.memberCount).toEqual(0n);
     expect(state.round).toEqual(0n);
     expect(state.paidThisRound).toEqual(0n);
+    expect(state.missedPayments).toEqual(0n);
+    expect(state.skippedRounds).toEqual(0n);
     expect(state.potHasCoin).toBe(false);
     expect(state.potColor).toHaveLength(32);
   });
@@ -60,6 +65,12 @@ describe('constructor', () => {
 
   it('rejects a zero contribution', () => {
     expect(() => new NightPotSimulator(3n, 0n)).toThrow('NightPot: contribution must be positive');
+  });
+
+  it('rejects rounds shorter than a minute', () => {
+    expect(() => new NightPotSimulator(3n, CONTRIBUTION, { roundSeconds: 59n })).toThrow(
+      'NightPot: a round must last at least a minute',
+    );
   });
 });
 
@@ -187,7 +198,7 @@ describe('contribute', () => {
 });
 
 describe('claimPayout', () => {
-  it('rejects a claim before everyone has paid', () => {
+  it('rejects a claim before everyone has paid while the round is still open', () => {
     const pot = activePot();
     pot.fundRound([alice, bob]);
 
@@ -213,6 +224,7 @@ describe('claimPayout', () => {
     expect(state.potHasCoin).toBe(false);
     expect(state.paidThisRound).toEqual(0n);
     expect(state.round).toEqual(1n);
+    expect(state.missedPayments).toEqual(0n);
     expect(state.payouts.member(pot.payoutNullifier(alice, 0n))).toBe(true);
   });
 
@@ -236,6 +248,96 @@ describe('claimPayout', () => {
     expect(state.phase).toEqual(Phase.completed);
     expect(state.payouts.size()).toEqual(3n);
     expect(() => pot.contribute(alice)).toThrow('NightPot: pot is not active');
+  });
+});
+
+describe('schedule: one member who stops paying cannot freeze the pot', () => {
+  it('closes joining at the join deadline', () => {
+    const pot = new NightPotSimulator(3n, CONTRIBUTION);
+    pot.join(alice);
+    pot.setTime(T0 + JOIN_WINDOW);
+
+    expect(() => pot.join(bob)).toThrow('NightPot: joining has closed');
+  });
+
+  it('refuses to cancel while joining is still open', () => {
+    const pot = new NightPotSimulator(3n, CONTRIBUTION);
+    pot.join(alice);
+
+    expect(() => pot.cancel()).toThrow('NightPot: joining is still open');
+  });
+
+  it('lets anyone cancel a pot that did not fill in time', () => {
+    const pot = new NightPotSimulator(3n, CONTRIBUTION);
+    pot.join(alice);
+    pot.setTime(T0 + JOIN_WINDOW);
+
+    expect(pot.cancel().phase).toEqual(Phase.cancelled);
+    expect(() => pot.join(bob)).toThrow('NightPot: pot is not accepting members');
+  });
+
+  it('refuses to cancel a pot that filled', () => {
+    const pot = activePot();
+    pot.setTime(T0 + JOIN_WINDOW);
+
+    expect(() => pot.cancel()).toThrow('NightPot: only a forming pot can be cancelled');
+  });
+
+  it('lets the recipient take what was paid once the round is due, counting the missed payment', () => {
+    const pot = activePot();
+    pot.fundRound([alice, bob]);
+    pot.setTime(pot.roundDue(0n));
+
+    expect(pot.claimPayout(alice).value).toEqual(2n * CONTRIBUTION);
+    const state = pot.getLedger();
+    expect(state.round).toEqual(1n);
+    expect(state.missedPayments).toEqual(1n);
+    expect(state.paidThisRound).toEqual(0n);
+  });
+
+  it('refuses a claim when nobody paid, even after the round is due', () => {
+    const pot = activePot();
+    pot.setTime(pot.roundDue(0n));
+
+    expect(() => pot.claimPayout(alice)).toThrow('NightPot: nothing was paid this round');
+  });
+
+  it('refuses to skip while the recipient can still claim', () => {
+    const pot = activePot();
+    pot.fundRound([alice, bob, carol]);
+    pot.setTime(pot.roundDue(0n));
+
+    expect(() => pot.skipRound()).toThrow('NightPot: the recipient can still claim this round');
+  });
+
+  it('skips an unclaimed round after the grace period and rolls the pot forward', () => {
+    const pot = activePot();
+    pot.fundRound([alice, bob, carol]);
+    pot.setTime(pot.roundDue(0n) + ROUND_SECONDS);
+
+    const skipped = pot.skipRound();
+    expect(skipped.skippedRounds).toEqual(1n);
+    expect(skipped.round).toEqual(1n);
+    expect(skipped.potHasCoin).toBe(true);
+    expect(skipped.pot.value).toEqual(3n * CONTRIBUTION);
+
+    pot.fundRound([alice, bob, carol]);
+    expect(pot.claimPayout(bob).value).toEqual(6n * CONTRIBUTION);
+  });
+
+  it('can run a pot to completion even when nobody shows up', () => {
+    const pot = new NightPotSimulator(2n, CONTRIBUTION);
+    pot.join(alice);
+    pot.join(bob);
+
+    pot.setTime(pot.roundDue(0n) + ROUND_SECONDS);
+    pot.skipRound();
+    pot.setTime(pot.roundDue(1n) + ROUND_SECONDS);
+    const state = pot.skipRound();
+
+    expect(state.phase).toEqual(Phase.completed);
+    expect(state.skippedRounds).toEqual(2n);
+    expect(state.missedPayments).toEqual(4n);
   });
 });
 
@@ -276,11 +378,13 @@ describe('privacy: secrets and slots never reach public state', () => {
       [
         'contribution',
         'contributions',
+        'joinDeadline',
         'maxMembers',
         'memberCount',
         'members',
         'mintCount',
         'mintNonce',
+        'missedPayments',
         'paidThisRound',
         'payouts',
         'phase',
@@ -288,6 +392,8 @@ describe('privacy: secrets and slots never reach public state', () => {
         'potColor',
         'potHasCoin',
         'round',
+        'roundLength',
+        'skippedRounds',
       ].sort(),
     );
   });

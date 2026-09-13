@@ -4,7 +4,8 @@
  * It runs the real compiled circuits against an in-memory ledger — the same
  * code path the chain executes — without a node, a wallet, or a proof server.
  * Several members share one ledger; each call runs with that member's private
- * state swapped in, exactly as each member's own device would.
+ * state swapped in, exactly as each member's own device would. The block clock
+ * is controllable so round deadlines can be tested.
  */
 import { Buffer } from 'node:buffer';
 import { randomBytes } from 'node:crypto';
@@ -32,6 +33,11 @@ import {
 /** Zswap coin public key stand-in for the simulated caller. */
 const TEST_COIN_PUBLIC_KEY = '0'.repeat(64);
 
+/** A fixed "now" so tests are deterministic. */
+export const T0 = 1_800_000_000n;
+export const JOIN_WINDOW = 3_600n;
+export const ROUND_SECONDS = 86_400n;
+
 export type ShieldedCoin = { nonce: Uint8Array; color: Uint8Array; value: bigint };
 
 /** A pot member as their own device sees them. */
@@ -47,21 +53,29 @@ export const member = (name: string, byteHex: string): Member => ({
   slot: 0n,
 });
 
+export type PotOptions = {
+  joinBy?: bigint;
+  roundSeconds?: bigint;
+  now?: bigint;
+};
+
 export class NightPotSimulator {
   readonly contract: Contract<NightPotPrivateState>;
   readonly address: string;
   circuitContext: CircuitContext<NightPotPrivateState>;
 
-  constructor(size: bigint, contribution: bigint, deployer: Uint8Array = new Uint8Array(32)) {
+  constructor(size: bigint, contribution: bigint, options: PotOptions = {}) {
     this.contract = new Contract<NightPotPrivateState>(witnesses as any);
     this.address = sampleContractAddress();
 
     const { currentPrivateState, currentContractState, currentZswapLocalState } =
       this.contract.initialState(
-        createConstructorContext(createNightPotPrivateState(deployer), TEST_COIN_PUBLIC_KEY),
+        createConstructorContext(createNightPotPrivateState(new Uint8Array(32)), TEST_COIN_PUBLIC_KEY),
         size,
         contribution,
         new Uint8Array(32).fill(7),
+        options.joinBy ?? T0 + JOIN_WINDOW,
+        options.roundSeconds ?? ROUND_SECONDS,
       );
 
     this.circuitContext = {
@@ -70,11 +84,24 @@ export class NightPotSimulator {
       costModel: CostModel.initialCostModel(),
       currentQueryContext: new QueryContext(currentContractState.data, this.address),
     };
+    this.setTime(options.now ?? T0);
+  }
+
+  /** Move the simulated block clock. */
+  public setTime(secondsSinceEpoch: bigint): void {
+    const query = this.circuitContext.currentQueryContext;
+    query.block = { ...query.block, secondsSinceEpoch, secondsSinceEpochErr: 0, lastBlockTime: secondsSinceEpoch };
   }
 
   /** The public, on-chain view of the pot. */
   public getLedger(): Ledger {
     return ledger(this.circuitContext.currentQueryContext.state);
+  }
+
+  /** When round `r` falls due, computed exactly as the contract does. */
+  public roundDue(r: bigint): bigint {
+    const l = this.getLedger();
+    return l.joinDeadline + (r + 1n) * l.roundLength;
   }
 
   /** The pot's identifier as used inside nullifiers. */
@@ -93,6 +120,16 @@ export class NightPotSimulator {
     m.slot = this.getLedger().memberCount;
     this.as(m);
     this.circuitContext = this.contract.impureCircuits.join(this.circuitContext).context;
+    return this.getLedger();
+  }
+
+  public cancel(): Ledger {
+    this.circuitContext = this.contract.impureCircuits.cancel(this.circuitContext).context;
+    return this.getLedger();
+  }
+
+  public skipRound(): Ledger {
+    this.circuitContext = this.contract.impureCircuits.skipRound(this.circuitContext).context;
     return this.getLedger();
   }
 

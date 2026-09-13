@@ -154,6 +154,11 @@ const steps = [
     body: 'When everyone has paid, the member whose turn it is proves it and pulls the whole pot to their own shielded key.',
     circuit: 'claimPayout()',
   },
+  {
+    verb: 'Keep moving',
+    body: 'Every round has a due date. After it, the recipient takes what was paid and the missed payments are counted, never named. An unclaimed round rolls forward.',
+    circuit: 'skipRound()',
+  },
 ];
 
 function HowItWorks() {
@@ -163,7 +168,7 @@ function HowItWorks() {
         <Reveal>
           <p className="text-sm font-medium text-accent">How it works</p>
           <h2 className="mt-3 max-w-[22ch] text-3xl font-semibold tracking-tight md:text-4xl">
-            Three moves, each proven in zero knowledge.
+            Every move is proven in zero knowledge.
           </h2>
         </Reveal>
         <ol className="mt-12 grid gap-10">
@@ -187,6 +192,7 @@ const publicFacts = [
   'How many seats are filled',
   'The current round and how many members have paid',
   'One-time tags for each payment and payout',
+  'How many payments were missed, never whose',
 ];
 const privateFacts = [
   'Your member secret',
@@ -242,8 +248,8 @@ const rows: { feature: string; cells: [Cell, Cell, Cell, Cell] }[] = [
   { feature: 'Members take turns receiving the pot', cells: ['yes', 'no', 'yes', 'yes'] },
   { feature: 'Hides who pays in and who gets paid', cells: ['yes', 'partly', 'partly', 'no'] },
   { feature: 'Contributions move as shielded tokens', cells: ['yes', 'no', 'no', 'no'] },
-  { feature: 'Protection when a member skips a round', cells: ['planned', 'no', 'no', 'partly'] },
-  { feature: 'Private savings history you can show a lender', cells: ['planned', 'no', 'no', 'no'] },
+  { feature: 'Keeps rotating when a member stops paying', cells: ['yes', 'no', 'no', 'partly'] },
+  { feature: 'Private pools for group purchases and investments', cells: ['planned', 'no', 'no', 'no'] },
 ];
 const columns = ['NightPot', 'HushPot', 'Sharibo', 'Public on-chain circles'];
 
@@ -360,19 +366,24 @@ const waves = [
     wave: 'Wave 1',
     dates: 'Aug 27 to Sep 16',
     status: 'Now',
-    items: ['Private pot contract with anonymous seats', 'Shielded contributions and pull payouts', 'Lace app on Preprod'],
+    items: [
+      'Private pot contract with anonymous seats',
+      'Shielded contributions and pull payouts',
+      'Round deadlines so no one can freeze a pot',
+      'Lace app on Preprod',
+    ],
   },
   {
     wave: 'Wave 2',
     dates: 'Sep 27 to Oct 17',
     status: 'Next',
-    items: ['Fair random payout order', 'Collateral and private default marks', 'Pot invites and discovery'],
+    items: ['Fair random payout order', 'Pooled collateral with private refunds', 'Pot invites and discovery'],
   },
   {
     wave: 'Wave 3',
     dates: 'Oct 27 to Nov 16',
     status: 'Later',
-    items: ['Portable savings credential', 'Proof of savings for lenders and landlords', 'Pilot with a real savings group'],
+    items: ['Private group-purchasing pools', 'Co-investment in fixed-size units', 'Pilot with a real trader group'],
   },
 ];
 

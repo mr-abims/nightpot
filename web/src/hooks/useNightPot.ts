@@ -3,7 +3,7 @@
  *
  * Owns the Lace connection (detection, connect, auto-reconnect), the browser
  * provider set, reading a pot's public state, and the contract actions
- * (create, mint test tokens, join, pay in, take the pot).
+ * (create, mint test tokens, join, pay in, take the pot, skip a round, cancel).
  *
  * Privacy boundary: the member secret and slot come from membership.ts and are
  * handed to the circuits as witnesses. What leaves the browser is a proof, the
@@ -57,7 +57,7 @@ const DETECT_INTERVAL_MS = 250;
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 export type WalletAvailability = 'checking' | 'missing' | 'outdated' | 'available';
-export type ActionName = 'create' | 'mint' | 'join' | 'contribute' | 'claim';
+export type ActionName = 'create' | 'mint' | 'join' | 'contribute' | 'claim' | 'skip' | 'cancel';
 export type ActionState = {
   name: ActionName | null;
   status: 'idle' | 'working' | 'done' | 'error';
@@ -76,7 +76,7 @@ export type MySeat = {
 
 export type PotView = {
   address: string;
-  phase: 'forming' | 'active' | 'completed';
+  phase: 'forming' | 'active' | 'completed' | 'cancelled';
   maxMembers: bigint;
   contribution: bigint;
   memberCount: bigint;
@@ -84,11 +84,25 @@ export type PotView = {
   paidThisRound: bigint;
   potValue: bigint;
   colorHex: string;
+  /** Seconds since the Unix epoch; seats must be filled before this. */
+  joinDeadline: bigint;
+  roundLength: bigint;
+  /** When the current round falls due; null unless the pot is active. */
+  roundDue: bigint | null;
+  missedPayments: bigint;
+  skippedRounds: bigint;
   me: MySeat | null;
 };
 
+export type CreatePotInput = {
+  size: number;
+  contribution: bigint;
+  joinWithinSeconds: number;
+  roundSeconds: number;
+};
+
 const phaseName = (p: Phase): PotView['phase'] =>
-  p === Phase.forming ? 'forming' : p === Phase.active ? 'active' : 'completed';
+  p === Phase.forming ? 'forming' : p === Phase.active ? 'active' : p === Phase.completed ? 'completed' : 'cancelled';
 
 const readPref = (): boolean => {
   try {
@@ -254,6 +268,12 @@ export function useNightPot(initialAddress: string | null) {
           paidThisRound: l.paidThisRound,
           potValue: l.potHasCoin ? l.pot.value : 0n,
           colorHex: bytesToHex(l.potColor),
+          joinDeadline: l.joinDeadline,
+          roundLength: l.roundLength,
+          // Same formula as roundDeadline() in the contract.
+          roundDue: l.phase === Phase.active ? l.joinDeadline + (l.round + 1n) * l.roundLength : null,
+          missedPayments: l.missedPayments,
+          skippedRounds: l.skippedRounds,
           me,
         };
         setPot(view);
@@ -372,6 +392,14 @@ export function useNightPot(initialAddress: string | null) {
     [buildProviders],
   );
 
+  /** Private state for calls that need no membership (mint, skip, cancel). */
+  const anyState = useCallback((target: string): NightPotPrivateState => {
+    const m = loadMembership(target);
+    return m
+      ? createNightPotPrivateState(hexToBytes(m.secretKeyHex), BigInt(m.slot))
+      : createNightPotPrivateState(randomBytes32());
+  }, []);
+
   /** Run one wallet action with consistent status, errors, and a refresh afterwards. */
   const run = useCallback(
     async (name: ActionName, fn: (api: ConnectedAPI) => Promise<{ txId?: string; message: string }>) => {
@@ -394,11 +422,12 @@ export function useNightPot(initialAddress: string | null) {
   );
 
   const createPot = useCallback(
-    (size: number, contribution: bigint) =>
+    (input: CreatePotInput) =>
       run('create', async (api) => {
+        const joinBy = BigInt(Math.floor(Date.now() / 1000) + Math.round(input.joinWithinSeconds));
         const deployed: any = await deployContract((await buildProviders(api)) as any, {
           compiledContract: compiledContract() as any,
-          args: [BigInt(size), contribution, randomBytes32()],
+          args: [BigInt(input.size), input.contribution, randomBytes32(), joinBy, BigInt(Math.round(input.roundSeconds))],
           privateStateId: PRIVATE_STATE_ID,
           initialPrivateState: createNightPotPrivateState(randomBytes32()),
         });
@@ -413,13 +442,11 @@ export function useNightPot(initialAddress: string | null) {
     () =>
       run('mint', async (api) => {
         if (!address) throw new Error('Open a pot first.');
-        const m = loadMembership(address);
-        const sk = m ? hexToBytes(m.secretKeyHex) : randomBytes32();
-        const deployed = await openPot(api, address, createNightPotPrivateState(sk, m ? BigInt(m.slot) : 0n));
+        const deployed = await openPot(api, address, anyState(address));
         const tx = await deployed.callTx.mintTestTokens();
         return { txId: tx.public.txId, message: 'Test tokens minted to your shielded balance.' };
       }),
-    [run, address, openPot],
+    [run, address, openPot, anyState],
   );
 
   const join = useCallback(
@@ -475,6 +502,28 @@ export function useNightPot(initialAddress: string | null) {
     [run, address, pot, openPot],
   );
 
+  const skipRound = useCallback(
+    () =>
+      run('skip', async (api) => {
+        if (!address || !pot) throw new Error('Open a pot first.');
+        const deployed = await openPot(api, address, anyState(address));
+        const tx = await deployed.callTx.skipRound();
+        return { txId: tx.public.txId, message: `Round ${Number(pot.round) + 1} was skipped and the pot moved on.` };
+      }),
+    [run, address, pot, openPot, anyState],
+  );
+
+  const cancelPot = useCallback(
+    () =>
+      run('cancel', async (api) => {
+        if (!address) throw new Error('Open a pot first.');
+        const deployed = await openPot(api, address, anyState(address));
+        const tx = await deployed.callTx.cancel();
+        return { txId: tx.public.txId, message: 'The pot was cancelled. No money was held.' };
+      }),
+    [run, address, openPot, anyState],
+  );
+
   return {
     status,
     availability,
@@ -497,5 +546,7 @@ export function useNightPot(initialAddress: string | null) {
     join,
     contribute,
     claimPayout,
+    skipRound,
+    cancelPot,
   };
 }

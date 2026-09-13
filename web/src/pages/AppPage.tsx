@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -6,6 +6,7 @@ import {
   ArrowsClockwise,
   CheckCircle,
   CircleNotch,
+  Clock,
   Coins,
   DeviceMobile,
   Eye,
@@ -16,7 +17,7 @@ import {
   WarningCircle,
 } from '@phosphor-icons/react';
 
-import { NETWORK_ID, useNightPot, type ActionName, type PotView } from '../hooks/useNightPot';
+import { NETWORK_ID, useNightPot, type ActionName, type CreatePotInput, type PotView } from '../hooks/useNightPot';
 import { decodeBackup, encodeBackup, loadMembership, saveMembership } from '../lib/membership';
 import { LACE_CHROME_URL, LACE_INSTALL_URL, PREPROD_FAUCET_URL } from '../config';
 
@@ -28,6 +29,26 @@ const input =
   'w-full rounded-xl border border-line bg-bg px-3 py-2.5 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none';
 
 const short = (s: string, head = 10, tail = 6) => (s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`);
+
+const formatTime = (seconds: bigint): string =>
+  new Date(Number(seconds) * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
+const formatDuration = (seconds: bigint): string => {
+  const s = Number(seconds);
+  if (s % 86_400 === 0) return `${s / 86_400} ${s === 86_400 ? 'day' : 'days'}`;
+  if (s % 3_600 === 0) return `${s / 3_600} ${s === 3_600 ? 'hour' : 'hours'}`;
+  return `${Math.round(s / 60)} min`;
+};
+
+/** Wall-clock seconds, refreshed periodically so due dates flip without a reload. */
+function useNowSeconds(): bigint {
+  const [now, setNow] = useState(() => BigInt(Math.floor(Date.now() / 1000)));
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(BigInt(Math.floor(Date.now() / 1000))), 15_000);
+    return () => window.clearInterval(id);
+  }, []);
+  return now;
+}
 
 type Hook = ReturnType<typeof useNightPot>;
 
@@ -157,13 +178,26 @@ function OpenOrCreate({
   creating,
 }: {
   onOpen: (address: string) => void;
-  onCreate: (size: number, amount: bigint) => void;
+  onCreate: (input: CreatePotInput) => void;
   canCreate: boolean;
   creating: boolean;
 }) {
   const [address, setAddress] = useState('');
   const [size, setSize] = useState('3');
   const [amount, setAmount] = useState('100');
+  const [joinHours, setJoinHours] = useState('24');
+  const [roundHours, setRoundHours] = useState('168');
+
+  const joinSeconds = Number(joinHours) * 3600;
+  const roundSeconds = Number(roundHours) * 3600;
+  const valid =
+    Number(size) >= 2 &&
+    Number(size) <= 64 &&
+    Number(amount) >= 1 &&
+    Number.isFinite(joinSeconds) &&
+    joinSeconds >= 60 &&
+    Number.isFinite(roundSeconds) &&
+    roundSeconds >= 60;
 
   const submitOpen = (e: FormEvent) => {
     e.preventDefault();
@@ -171,7 +205,8 @@ function OpenOrCreate({
   };
   const submitCreate = (e: FormEvent) => {
     e.preventDefault();
-    onCreate(Number(size), BigInt(amount));
+    if (!valid) return;
+    onCreate({ size: Number(size), contribution: BigInt(amount), joinWithinSeconds: joinSeconds, roundSeconds });
   };
 
   return (
@@ -198,8 +233,17 @@ function OpenOrCreate({
               <span className="font-medium">Each round pays</span>
               <input className={input} type="number" min={1} value={amount} onChange={(e) => setAmount(e.target.value)} />
             </label>
+            <label className="grid gap-2 text-sm">
+              <span className="font-medium">Seats fill within (hours)</span>
+              <input className={input} type="number" min={0.02} step="any" value={joinHours} onChange={(e) => setJoinHours(e.target.value)} />
+            </label>
+            <label className="grid gap-2 text-sm">
+              <span className="font-medium">Each round lasts (hours)</span>
+              <input className={input} type="number" min={0.02} step="any" value={roundHours} onChange={(e) => setRoundHours(e.target.value)} />
+            </label>
           </div>
-          <button type="submit" className={primary} disabled={!canCreate || creating || Number(size) < 2 || Number(size) > 64 || Number(amount) < 1}>
+          <p className="text-xs text-muted">Short rounds such as 0.25 hours are handy for a demo. Block time is approximate, so leave a few minutes of slack.</p>
+          <button type="submit" className={primary} disabled={!canCreate || creating || !valid}>
             {creating ? <CircleNotch size={16} className="animate-spin" /> : null}
             {creating ? 'Creating pot' : 'Create pot'}
           </button>
@@ -240,22 +284,28 @@ function ActionButton({
   );
 }
 
-function PotActions({ pot, hook }: { pot: PotView; hook: Hook }) {
+function PotActions({ pot, hook, now }: { pot: PotView; hook: Hook; now: bigint }) {
   const connected = hook.status === 'connected';
   const me = pot.me;
   const seated = !!me?.seated;
   const fullyPaid = pot.paidThisRound === pot.maxMembers;
   const balance = hook.tokenBalance;
+  const joinClosed = now >= pot.joinDeadline;
+  const overdue = pot.roundDue !== null && now >= pot.roundDue;
+  const skipAt = pot.roundDue !== null ? pot.roundDue + pot.roundLength : null;
+  const skippable = skipAt !== null && now >= skipAt;
 
   const joinHint = !connected
     ? 'Connect Lace first.'
     : pot.phase !== 'forming'
-      ? 'This pot is full.'
-      : me && !me.seated
-        ? 'Your seat is waiting to be confirmed.'
-        : seated
-          ? 'You already hold a seat.'
-          : null;
+      ? 'This pot is no longer taking members.'
+      : joinClosed
+        ? 'Joining has closed.'
+        : me && !me.seated
+          ? 'Your seat is waiting to be confirmed.'
+          : seated
+            ? 'You already hold a seat.'
+            : null;
   const payHint = !connected
     ? 'Connect Lace first.'
     : pot.phase !== 'active'
@@ -273,9 +323,11 @@ function PotActions({ pot, hook }: { pot: PotView; hook: Hook }) {
       ? 'No round is open.'
       : !me?.myTurn
         ? 'It is not your turn this round.'
-        : !fullyPaid
-          ? 'Waiting for every member to pay in.'
-          : null;
+        : !fullyPaid && !overdue
+          ? `Waiting for every member to pay, or until ${formatTime(pot.roundDue!)}.`
+          : pot.potValue === 0n
+            ? 'Nothing has been paid this round yet.'
+            : null;
 
   return (
     <Panel title="Your moves" icon={<HandCoins size={20} weight="duotone" className="text-accent" />}>
@@ -291,7 +343,48 @@ function PotActions({ pot, hook }: { pot: PotView; hook: Hook }) {
           variant="secondary"
         />
         <ActionButton label="Pay in" name="contribute" current={hook.action} disabled={payHint !== null} hint={payHint} onClick={hook.contribute} />
-        <ActionButton label="Take the pot" name="claim" current={hook.action} disabled={claimHint !== null} hint={claimHint} onClick={hook.claimPayout} />
+        <ActionButton
+          label={overdue && !fullyPaid ? 'Take what was paid' : 'Take the pot'}
+          name="claim"
+          current={hook.action}
+          disabled={claimHint !== null}
+          hint={claimHint}
+          onClick={hook.claimPayout}
+        />
+        {pot.phase === 'active' && (
+          <ActionButton
+            label="Skip this round"
+            name="skip"
+            current={hook.action}
+            disabled={!connected || !skippable}
+            hint={
+              !connected
+                ? 'Connect Lace first.'
+                : skippable
+                  ? 'The recipient did not claim in time. Anyone can move the pot on.'
+                  : `Available from ${formatTime(skipAt!)} if the round is still unclaimed.`
+            }
+            onClick={hook.skipRound}
+            variant="secondary"
+          />
+        )}
+        {pot.phase === 'forming' && (
+          <ActionButton
+            label="Cancel this pot"
+            name="cancel"
+            current={hook.action}
+            disabled={!connected || !joinClosed}
+            hint={
+              !connected
+                ? 'Connect Lace first.'
+                : joinClosed
+                  ? 'The seats did not fill in time. Anyone can cancel.'
+                  : `Available from ${formatTime(pot.joinDeadline)} if seats are still empty.`
+            }
+            onClick={hook.cancelPot}
+            variant="secondary"
+          />
+        )}
       </div>
 
       {hook.action.status === 'done' && (
@@ -365,7 +458,9 @@ function SeatBackup({ address, onRestored }: { address: string; onRestored: () =
 }
 
 function PotDetail({ pot, hook }: { pot: PotView; hook: Hook }) {
+  const now = useNowSeconds();
   const me = pot.me;
+  const overdue = pot.roundDue !== null && now >= pot.roundDue;
   return (
     <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
       <div className="grid content-start gap-4">
@@ -377,22 +472,33 @@ function PotDetail({ pot, hook }: { pot: PotView; hook: Hook }) {
                 Round {Number(pot.round) + 1} of {Number(pot.maxMembers)}
               </p>
             )}
+            {pot.phase === 'active' && overdue && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-3 py-1 text-xs font-semibold text-ink">
+                <Clock size={14} weight="bold" /> Round is due
+              </span>
+            )}
           </div>
           <dl className="mt-4 divide-y divide-line/60">
             <Row label="Seats filled" value={`${pot.memberCount} / ${pot.maxMembers}`} />
+            {pot.phase === 'forming' && <Row label="Seats close" value={formatTime(pot.joinDeadline)} />}
+            {pot.roundDue !== null && <Row label="This round is due" value={formatTime(pot.roundDue)} />}
             <Row label="Paid this round" value={`${pot.paidThisRound} / ${pot.maxMembers}`} />
             <Row label="Each round pays" value={pot.contribution.toString()} />
+            <Row label="Round length" value={formatDuration(pot.roundLength)} />
             <Row label="In the pot now" value={pot.potValue.toString()} />
+            <Row label="Missed payments" value={pot.missedPayments.toString()} />
+            <Row label="Skipped rounds" value={pot.skippedRounds.toString()} />
             <Row label="Address" value={<span title={pot.address}>{short(pot.address)}</span>} />
           </dl>
         </Panel>
-        <PotActions pot={pot} hook={hook} />
+        <PotActions pot={pot} hook={hook} now={now} />
       </div>
 
       <div className="grid content-start gap-4">
         <Panel title="What the chain sees" icon={<Eye size={20} weight="duotone" className="text-muted" />}>
           <p className="text-sm text-muted">
-            Seat count, round, how many have paid, the pot balance, and one-time tags. Never which seat is whose.
+            Seat count, schedule, round, how many have paid, the pot balance, missed-payment counts, and one-time tags. Never
+            which seat is whose, or who missed a payment.
           </p>
         </Panel>
         <Panel title="Only on this device" tone="accent" icon={<DeviceMobile size={20} weight="duotone" className="text-accent" />}>

@@ -8,7 +8,7 @@ and the rotation continues until everyone has had a turn. A Compact contract enf
 proofs keep members anonymous; the pot moves as shielded tokens.
 
 - Contract: [`contracts/nightpot.compact`](contracts/nightpot.compact)
-- Tests: [`tests/nightpot.test.ts`](tests/nightpot.test.ts) (27 passing)
+- Tests: [`tests/nightpot.test.ts`](tests/nightpot.test.ts) (37 passing)
 - Web app and landing page: [`web/`](web)
 - Architecture and privacy model: [`docs/architecture.md`](docs/architecture.md)
 
@@ -29,7 +29,12 @@ Public-chain savings circles fix the cash box but make every payment, payout, an
 | Take a seat | `join()` | nothing yet; the device creates a secret | a hidden Merkle leaf; seat count +1 |
 | Pay in | `contribute(coin)` | "I hold a seat in this pot" | a one-time tag for this round; the coin joins the pot |
 | Take the pot | `claimPayout()` | "I hold the seat whose turn it is" | a one-time payout tag; the whole pot goes to the caller's own shielded key |
+| Keep it moving | `skipRound()` / `cancel()` | nothing | an unclaimed round rolls forward after a grace period; a pot that never fills is cancelled |
 | Get test tokens | `mintTestTokens()` | nothing | one contribution's worth of the pot token (Preprod testing only) |
+
+Every round has a due date: `joinDeadline + (round + 1) × roundLength`, checked against block time. Once it passes,
+the member whose turn it is can take whatever was paid, and the contract counts the missed payments without recording
+whose they were. One member who stops paying cannot freeze the pot.
 
 ### What is public and what is private
 
@@ -37,7 +42,7 @@ Public-chain savings circles fix the cash box but make every payment, payout, an
 |--------------------|------------------------|
 | Pot size, contribution amount, pot token | The member secret |
 | Seats filled, current round, members paid this round | Which seat (and so which turn) is theirs |
-| Pot balance | The Merkle path used in each proof |
+| Pot balance, missed-payment and skipped-round counts | The Merkle path used in each proof |
 | One-time tags (nullifiers) | Any link between two payments by the same member |
 
 Contributions are deliberately equal: the amount a contract receives into a held coin is public on Midnight, so
@@ -51,8 +56,8 @@ shielded send to an arbitrary key does not notify that key. In very small pots, 
 | Members take turns receiving the pot | Yes | No (one-time pot) | Yes | Yes |
 | Hides who pays in and who gets paid | Yes | Partly | Partly (deposits public) | No |
 | Contributions move as shielded tokens | Yes | No | No (Stellar) | No |
-| Protection when a member skips a round | Wave 2 | No | No | Partly (collateral) |
-| Private savings history for lenders | Wave 3 | No | No | No |
+| Keeps rotating when a member stops paying | Yes (round deadlines); collateral in Wave 2 | No | No | Partly (collateral) |
+| Private group-purchasing and investment pools | Wave 3 | No | No | No |
 
 Based on each project's public documentation, September 2026.
 
@@ -74,7 +79,7 @@ contracts/nightpot.compact   the contract
 src/witnesses.ts             private state + witness implementations (shared by Node and web)
 src/{network,wallet}.ts      Node wallet and network helpers
 scripts/spike-shielded.ts    end-to-end run on Preprod: deploy, join x2, mint, pay in x2, claim
-tests/                       simulator + 27 tests (logic, state, privacy)
+tests/                       simulator + 37 tests (logic, state, schedule, privacy)
 web/                         landing page (/) and Lace app (/app)
 docs/                        architecture, deck outline, video script, Wave 1 progress
 ```
@@ -89,7 +94,7 @@ compact update 0.31.1
 
 npm install
 npm run compile        # compact compile +0.31.1 contracts/nightpot.compact managed/nightpot
-npm test               # 27 simulator tests
+npm test               # 37 simulator tests
 ```
 
 ### Run the web app
@@ -117,6 +122,9 @@ npm run spike          # uses a Preprod wallet from .midnight-state.json or MIDN
 - **Logic:** full three-member rotation to completion; rejects joining a full pot, paying while forming, double
   payments, non-members, wrong token, wrong amount, claims before the round is funded, and claims by the wrong seat.
 - **State:** seat assignment, activation, pot balance accumulation, round advance, completion.
+- **Schedule:** joining closes at the deadline, unfilled pots can be cancelled, overdue rounds pay out what was paid
+  and count the missed payments, unclaimed rounds are skipped after a grace period, and a pot runs to completion even
+  if nobody shows up.
 - **Privacy:** member secrets never appear in serialized ledger state; leaves and nullifiers are unlinkable across
   purposes, rounds, and pots; the ledger exposes only documented fields.
 
@@ -126,8 +134,10 @@ See [`docs/wave1-progress.md`](docs/wave1-progress.md).
 
 ## Roadmap
 
-- **Wave 2:** fair random payout order (commit-reveal), collateral with private default marks, pot invites.
-- **Wave 3:** portable savings credential and proof of savings for lenders and landlords, pilot with a real group.
+- **Wave 2:** fair random payout order (commit-reveal), pooled collateral with private refunds (members prove they
+  paid every round to reclaim it), pot invites.
+- **Wave 3:** private group-purchasing and investment pools on the same primitives (fixed-size units keep amounts
+  private), piloted with a real group.
 
 ## License
 
