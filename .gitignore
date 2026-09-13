@@ -76,3 +76,5 @@ web/.vite/
 
 # Contract work-in-progress while the Preprod run uses managed/
 .dev-dl/
+spike.log
+spike-local.log

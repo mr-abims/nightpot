@@ -15,7 +15,10 @@
     "network": "tsx src/network.ts",
     "proof-server:start": "docker compose up -d",
     "proof-server:stop": "docker compose down",
-    "clean": "rm -rf managed .midnight-state.json .midnight-wallet-state"
+    "clean": "rm -rf managed .midnight-state.json .midnight-wallet-state",
+    "spike:local": "tsx scripts/spike-shielded.ts --network undeployed",
+    "devnet:up": "docker compose up -d",
+    "devnet:down": "docker compose down"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-runtime": "0.16.0",

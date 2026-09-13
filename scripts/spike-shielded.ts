@@ -63,6 +63,31 @@ async function main(): Promise<void> {
   await persistWalletState(network, walletCtx);
   console.log('  ✓ Synced.\n');
 
+  // A fresh wallet (the local devnet genesis wallet, or a new Preprod wallet) must register
+  // its NIGHT for DUST generation before it can pay fees. Same flow as the counter repo's deploy.
+  const synced: any = await Rx.firstValueFrom(walletCtx.wallet.state().pipe(Rx.filter((s: any) => s.isSynced)));
+  const unregistered = synced.unshielded.availableCoins.filter((c: any) => !c.meta?.registeredForDustGeneration);
+  if (unregistered.length > 0) {
+    console.log(`  Registering ${unregistered.length} NIGHT UTXOs for DUST generation...`);
+    // The signing callback already signs every input; do not sign the recipe again.
+    const recipe = await walletCtx.wallet.registerNightUtxosForDustGeneration(
+      unregistered,
+      walletCtx.unshieldedKeystore.getPublicKey(),
+      (payload: any) => walletCtx.unshieldedKeystore.signData(payload),
+    );
+    await walletCtx.wallet.submitTransaction(await walletCtx.wallet.finalizeRecipe(recipe));
+  }
+  if (synced.dust.balance(new Date()) === 0n) {
+    console.log('  Waiting for DUST to generate...');
+    await Rx.firstValueFrom(
+      walletCtx.wallet.state().pipe(
+        Rx.throttleTime(5000),
+        Rx.filter((s: any) => s.isSynced && s.dust.balance(new Date()) > 0n),
+      ),
+    );
+  }
+  console.log('  ✓ DUST ready.\n');
+
   const zkConfigProvider = new NodeZkConfigProvider(zkConfigPath);
   const walletProvider = {
     getCoinPublicKey: () => walletCtx.shieldedSecretKeys.coinPublicKey,
