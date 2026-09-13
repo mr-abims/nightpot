@@ -1,9 +1,9 @@
 /**
  * Midnight SDK hook for NightPot.
  *
- * Owns the Lace connection, the browser provider set, reading a pot's public
- * state, and the five contract actions (create, mint test tokens, join, pay in,
- * take the pot).
+ * Owns the Lace connection (detection, connect, auto-reconnect), the browser
+ * provider set, reading a pot's public state, and the contract actions
+ * (create, mint test tokens, join, pay in, take the pot).
  *
  * Privacy boundary: the member secret and slot come from membership.ts and are
  * handed to the circuits as witnesses. What leaves the browser is a proof, the
@@ -48,8 +48,15 @@ const INDEXER_URI = import.meta.env.VITE_INDEXER_URI || 'https://indexer.preprod
 const INDEXER_WS_URI =
   import.meta.env.VITE_INDEXER_WS_URI || 'wss://indexer.preprod.midnight.network/api/v4/graphql/ws';
 const PRIVATE_STATE_ID = 'nightpotPrivateState';
+const REQUIRED_CONNECTOR_MAJOR = '4.';
+const AUTOCONNECT_KEY = 'nightpot:autoconnect';
+
+/** Wallet extensions inject window.midnight shortly after load; poll briefly before calling it missing. */
+const DETECT_ATTEMPTS = 12;
+const DETECT_INTERVAL_MS = 250;
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
+export type WalletAvailability = 'checking' | 'missing' | 'outdated' | 'available';
 export type ActionName = 'create' | 'mint' | 'join' | 'contribute' | 'claim';
 export type ActionState = {
   name: ActionName | null;
@@ -83,6 +90,22 @@ export type PotView = {
 const phaseName = (p: Phase): PotView['phase'] =>
   p === Phase.forming ? 'forming' : p === Phase.active ? 'active' : 'completed';
 
+const readPref = (): boolean => {
+  try {
+    return window.localStorage.getItem(AUTOCONNECT_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+const writePref = (on: boolean): void => {
+  try {
+    if (on) window.localStorage.setItem(AUTOCONNECT_KEY, '1');
+    else window.localStorage.removeItem(AUTOCONNECT_KEY);
+  } catch {
+    // Storage unavailable: the user simply connects manually each visit.
+  }
+};
+
 function describeError(error: unknown): string {
   const err = error as { code?: string; message?: string; reason?: string } | undefined;
   const raw = err?.reason ?? err?.message ?? String(error);
@@ -100,12 +123,13 @@ function describeError(error: unknown): string {
   return raw;
 }
 
+/** Every injected Midnight wallet, preferring one that speaks the connector API version we build against. */
 function findWallet(): InitialAPI | undefined {
   if (!window.midnight) return undefined;
-  return Object.values(window.midnight).find(
-    (w): w is InitialAPI =>
-      !!w && typeof w === 'object' && 'apiVersion' in w && String((w as InitialAPI).apiVersion).startsWith('4.'),
+  const wallets = Object.values(window.midnight).filter(
+    (w): w is InitialAPI => !!w && typeof w === 'object' && typeof (w as InitialAPI).connect === 'function',
   );
+  return wallets.find((w) => String(w.apiVersion).startsWith(REQUIRED_CONNECTOR_MAJOR)) ?? wallets[0];
 }
 
 const potIdBytes = (address: string): Uint8Array => fromHex(address).slice(0, 32);
@@ -118,6 +142,9 @@ const compiledContract = () =>
 
 export function useNightPot(initialAddress: string | null) {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
+  const [availability, setAvailability] = useState<WalletAvailability>('checking');
+  const [detectedWallet, setDetectedWallet] = useState<{ name: string; apiVersion: string } | null>(null);
+  const [detectRun, setDetectRun] = useState(0);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [walletError, setWalletError] = useState<string | null>(null);
 
@@ -130,6 +157,43 @@ export function useNightPot(initialAddress: string | null) {
   const [action, setAction] = useState<ActionState>({ name: null, status: 'idle', message: null, txId: null });
 
   const apiRef = useRef<ConnectedAPI | null>(null);
+  const autoConnectTried = useRef(false);
+
+  // Detect Lace as soon as the page loads, and again whenever the user asks us to re-check.
+  useEffect(() => {
+    let cancelled = false;
+    let attempt = 0;
+    let timer: number | undefined;
+    setAvailability('checking');
+
+    const check = () => {
+      if (cancelled) return;
+      const wallet = findWallet();
+      if (wallet) {
+        setDetectedWallet({ name: wallet.name, apiVersion: String(wallet.apiVersion) });
+        setAvailability(String(wallet.apiVersion).startsWith(REQUIRED_CONNECTOR_MAJOR) ? 'available' : 'outdated');
+        return;
+      }
+      attempt += 1;
+      if (attempt >= DETECT_ATTEMPTS) {
+        setDetectedWallet(null);
+        setAvailability('missing');
+        return;
+      }
+      timer = window.setTimeout(check, DETECT_INTERVAL_MS);
+    };
+
+    check();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [detectRun]);
+
+  const recheckWallet = useCallback(() => {
+    setWalletError(null);
+    setDetectRun((n) => n + 1);
+  }, []);
 
   const refreshBalance = useCallback(async (colorHex: string | undefined) => {
     const api = apiRef.current;
@@ -214,29 +278,48 @@ export function useNightPot(initialAddress: string | null) {
     try {
       const initial = findWallet();
       if (!initial) {
-        throw new Error('No Midnight wallet found. Install Lace with Midnight support, then reload this page.');
+        setAvailability('missing');
+        throw new Error('Lace is not installed in this browser, or it has not loaded yet.');
       }
+      if (!String(initial.apiVersion).startsWith(REQUIRED_CONNECTOR_MAJOR)) {
+        setAvailability('outdated');
+        throw new Error(
+          `${initial.name} speaks DApp Connector API ${initial.apiVersion}; NightPot needs ${REQUIRED_CONNECTOR_MAJOR}x. Update Lace and reload.`,
+        );
+      }
+      // This is the call that makes Lace show its approval prompt.
       const api = await initial.connect(NETWORK_ID);
       const connection = await api.getConnectionStatus();
-      if (connection.status !== 'connected') throw new Error('Lace reports it is not connected. Approve the connection.');
+      if (connection.status !== 'connected') throw new Error('Lace reports it is not connected. Approve the connection in Lace.');
       if (connection.networkId !== NETWORK_ID) {
-        throw new Error(`Lace is on ${connection.networkId}. Switch it to ${NETWORK_ID} and reconnect.`);
+        throw new Error(`Lace is on ${connection.networkId}. Switch it to ${NETWORK_ID} in Lace settings and connect again.`);
       }
       const { unshieldedAddress } = await api.getUnshieldedAddress();
       apiRef.current = api;
       setWalletAddress(unshieldedAddress);
       setStatus('connected');
+      writePref(true);
       void readPot();
     } catch (error) {
       apiRef.current = null;
       setWalletAddress(null);
       setStatus('disconnected');
+      const code = (error as { code?: string } | undefined)?.code;
+      if (code === 'Rejected' || code === 'PermissionRejected') writePref(false);
       setWalletError(describeError(error));
     }
   }, [readPot]);
 
+  // Returning visitors who connected before are reconnected once Lace is detected.
+  useEffect(() => {
+    if (availability !== 'available' || status !== 'disconnected' || autoConnectTried.current) return;
+    autoConnectTried.current = true;
+    if (readPref()) void connect();
+  }, [availability, status, connect]);
+
   const disconnect = useCallback(() => {
     apiRef.current = null;
+    writePref(false);
     setWalletAddress(null);
     setStatus('disconnected');
     setTokenBalance(null);
@@ -394,6 +477,9 @@ export function useNightPot(initialAddress: string | null) {
 
   return {
     status,
+    availability,
+    detectedWallet,
+    recheckWallet,
     walletAddress,
     walletError,
     connect,

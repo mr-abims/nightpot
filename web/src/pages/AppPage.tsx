@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
+  ArrowSquareOut,
   ArrowsClockwise,
   CheckCircle,
   CircleNotch,
@@ -17,6 +18,7 @@ import {
 
 import { NETWORK_ID, useNightPot, type ActionName, type PotView } from '../hooks/useNightPot';
 import { decodeBackup, encodeBackup, loadMembership, saveMembership } from '../lib/membership';
+import { LACE_CHROME_URL, LACE_INSTALL_URL, PREPROD_FAUCET_URL } from '../config';
 
 const primary =
   'inline-flex items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-accent-ink transition active:scale-[0.98] hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50';
@@ -26,6 +28,8 @@ const input =
   'w-full rounded-xl border border-line bg-bg px-3 py-2.5 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none';
 
 const short = (s: string, head = 10, tail = 6) => (s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`);
+
+type Hook = ReturnType<typeof useNightPot>;
 
 function Panel({ title, icon, children, tone = 'surface' }: { title: string; icon?: ReactNode; children: ReactNode; tone?: 'surface' | 'accent' }) {
   return (
@@ -45,6 +49,104 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
       <dt className="text-muted">{label}</dt>
       <dd className="text-right font-mono tabular-nums">{value}</dd>
     </div>
+  );
+}
+
+/**
+ * The first thing a visitor sees until Lace is connected: it detects the
+ * extension on load and walks them through installing, updating, or connecting.
+ */
+function WalletGate({ hook }: { hook: Hook }) {
+  if (hook.status === 'connected') return null;
+
+  const error = hook.walletError && (
+    <div className="mt-4 flex gap-3 rounded-xl border border-line bg-bg p-4 text-sm" role="alert">
+      <WarningCircle size={20} weight="duotone" className="shrink-0 text-accent" />
+      <p className="min-w-0 break-words">{hook.walletError}</p>
+    </div>
+  );
+
+  if (hook.availability === 'checking') {
+    return (
+      <section className="rounded-2xl border border-line bg-surface p-6 sm:p-8" aria-busy="true">
+        <p className="flex items-center gap-3 text-muted">
+          <CircleNotch size={20} className="animate-spin" />
+          Looking for the Lace wallet in this browser
+        </p>
+      </section>
+    );
+  }
+
+  if (hook.availability === 'missing') {
+    return (
+      <section className="rounded-2xl border border-accent bg-accent-soft p-6 sm:p-8">
+        <h2 className="text-2xl font-semibold tracking-tight">Install Lace to use NightPot</h2>
+        <p className="mt-3 max-w-[60ch] text-muted">
+          NightPot runs in your browser and uses the Lace wallet to prove membership and pay privately. Install Lace,
+          create or restore a wallet, switch it to {NETWORK_ID}, then come back to this page.
+        </p>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <a href={LACE_INSTALL_URL} target="_blank" rel="noopener noreferrer" className={primary}>
+            Install Lace <ArrowSquareOut size={16} weight="bold" />
+          </a>
+          <a href={LACE_CHROME_URL} target="_blank" rel="noopener noreferrer" className={secondary}>
+            Chrome Web Store
+          </a>
+          <button type="button" className={secondary} onClick={hook.recheckWallet}>
+            <ArrowsClockwise size={16} /> Check again
+          </button>
+        </div>
+        <p className="mt-4 text-sm text-muted">
+          Using Brave? Turn off Shields for this site so the extension can connect. You can still open a pot and read its
+          public state without a wallet.
+        </p>
+        {error}
+      </section>
+    );
+  }
+
+  if (hook.availability === 'outdated') {
+    return (
+      <section className="rounded-2xl border border-accent bg-accent-soft p-6 sm:p-8">
+        <h2 className="text-2xl font-semibold tracking-tight">Update Lace to continue</h2>
+        <p className="mt-3 max-w-[60ch] text-muted">
+          {hook.detectedWallet?.name ?? 'Your wallet'} reports DApp Connector API {hook.detectedWallet?.apiVersion}.
+          NightPot needs version 4. Update the extension, then reload this page.
+        </p>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <a href={LACE_INSTALL_URL} target="_blank" rel="noopener noreferrer" className={primary}>
+            Get the latest Lace <ArrowSquareOut size={16} weight="bold" />
+          </a>
+          <button type="button" className={secondary} onClick={hook.recheckWallet}>
+            <ArrowsClockwise size={16} /> Check again
+          </button>
+        </div>
+        {error}
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-2xl border border-accent bg-accent-soft p-6 sm:p-8">
+      <h2 className="text-2xl font-semibold tracking-tight">Connect Lace to take part</h2>
+      <p className="mt-3 max-w-[60ch] text-muted">
+        Lace will ask you to approve NightPot. Choose Always to skip this step next time. Make sure Lace is on{' '}
+        {NETWORK_ID} and holds tNIGHT with DUST for fees.
+      </p>
+      <div className="mt-6 flex flex-wrap gap-3">
+        <button type="button" className={primary} onClick={hook.connect} disabled={hook.status === 'connecting'}>
+          {hook.status === 'connecting' ? <CircleNotch size={16} className="animate-spin" /> : <Wallet size={16} weight="bold" />}
+          {hook.status === 'connecting' ? 'Approve in Lace' : 'Connect Lace'}
+        </button>
+        <a href={PREPROD_FAUCET_URL} target="_blank" rel="noopener noreferrer" className={secondary}>
+          Get tNIGHT <ArrowSquareOut size={16} weight="bold" />
+        </a>
+      </div>
+      {hook.status === 'connecting' && (
+        <p className="mt-4 text-sm text-muted">Waiting for your approval. If no prompt appears, click the Lace icon in your browser toolbar.</p>
+      )}
+      {error}
+    </section>
   );
 }
 
@@ -138,7 +240,7 @@ function ActionButton({
   );
 }
 
-function PotActions({ pot, hook }: { pot: PotView; hook: ReturnType<typeof useNightPot> }) {
+function PotActions({ pot, hook }: { pot: PotView; hook: Hook }) {
   const connected = hook.status === 'connected';
   const me = pot.me;
   const seated = !!me?.seated;
@@ -262,7 +364,7 @@ function SeatBackup({ address, onRestored }: { address: string; onRestored: () =
   );
 }
 
-function PotDetail({ pot, hook }: { pot: PotView; hook: ReturnType<typeof useNightPot> }) {
+function PotDetail({ pot, hook }: { pot: PotView; hook: Hook }) {
   const me = pot.me;
   return (
     <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
@@ -324,10 +426,30 @@ export default function AppPage() {
     setParams({ pot: address });
   };
 
-  const createPot = (size: number, amount: bigint) => hook.createPot(size, amount);
   if (hook.address && params.get('pot') !== hook.address) {
     queueMicrotask(() => setParams({ pot: hook.address! }, { replace: true }));
   }
+
+  const headerAction =
+    hook.status === 'connected' && hook.walletAddress ? (
+      <div className="flex items-center gap-3">
+        <span className="hidden font-mono text-xs text-muted sm:inline" title={hook.walletAddress}>
+          {short(hook.walletAddress, 12, 6)}
+        </span>
+        <button type="button" className={secondary} onClick={hook.disconnect}>
+          Disconnect
+        </button>
+      </div>
+    ) : hook.availability === 'available' ? (
+      <button type="button" className={primary} onClick={hook.connect} disabled={hook.status === 'connecting'}>
+        <Wallet size={16} weight="bold" />
+        {hook.status === 'connecting' ? 'Approve in Lace' : 'Connect Lace'}
+      </button>
+    ) : hook.availability === 'missing' ? (
+      <a href={LACE_INSTALL_URL} target="_blank" rel="noopener noreferrer" className={primary}>
+        Install Lace <ArrowSquareOut size={16} weight="bold" />
+      </a>
+    ) : null;
 
   return (
     <div className="min-h-[100dvh]">
@@ -337,21 +459,7 @@ export default function AppPage() {
             <ArrowLeft size={16} />
             NightPot
           </Link>
-          {hook.status === 'connected' && hook.walletAddress ? (
-            <div className="flex items-center gap-3">
-              <span className="hidden font-mono text-xs text-muted sm:inline" title={hook.walletAddress}>
-                {short(hook.walletAddress, 12, 6)}
-              </span>
-              <button type="button" className={secondary} onClick={hook.disconnect}>
-                Disconnect
-              </button>
-            </div>
-          ) : (
-            <button type="button" className={primary} onClick={hook.connect} disabled={hook.status === 'connecting'}>
-              <Wallet size={16} weight="bold" />
-              {hook.status === 'connecting' ? 'Waiting for Lace' : 'Connect Lace'}
-            </button>
-          )}
+          {headerAction}
         </div>
       </header>
 
@@ -369,16 +477,11 @@ export default function AppPage() {
           )}
         </div>
 
-        {hook.walletError && (
-          <div className="flex gap-3 rounded-2xl border border-line bg-surface p-4 text-sm" role="alert">
-            <WarningCircle size={20} weight="duotone" className="shrink-0 text-accent" />
-            <p>{hook.walletError}</p>
-          </div>
-        )}
+        <WalletGate hook={hook} />
 
         <OpenOrCreate
           onOpen={open}
-          onCreate={createPot}
+          onCreate={hook.createPot}
           canCreate={hook.status === 'connected'}
           creating={hook.action.name === 'create' && hook.action.status === 'working'}
         />
