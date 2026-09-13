@@ -207,7 +207,9 @@ circuit closeRound(): [] {
   }
 }
 
-export circuit roundDeadline(r: Uint<16>): Uint<64> {
+// Internal helper: exporting it would make it a callable on-chain circuit with its
+// own verifier key. The web app computes the same formula from public state.
+circuit roundDeadline(r: Uint<16>): Uint<64> {
   return (joinDeadline + ((r as Uint<64>) + 1) * roundLength) as Uint<64>;
 }
 
