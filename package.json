@@ -7,18 +7,18 @@
   "scripts": {
     "compile": "compact compile +0.31.1 contracts/nightpot.compact managed/nightpot",
     "compile:fast": "compact compile +0.31.1 --skip-zk contracts/nightpot.compact managed/nightpot",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy": "tsx src/deploy.ts",
-    "spike": "tsx scripts/spike-shielded.ts",
     "network": "tsx src/network.ts",
     "proof-server:start": "docker compose up -d",
     "proof-server:stop": "docker compose down",
     "clean": "rm -rf managed .midnight-state.json .midnight-wallet-state",
-    "spike:local": "tsx scripts/spike-shielded.ts --network undeployed",
     "devnet:up": "docker compose up -d",
-    "devnet:down": "docker compose down"
+    "devnet:down": "docker compose down",
+    "e2e": "tsx scripts/e2e-pot.ts",
+    "e2e:local": "tsx scripts/e2e-pot.ts --network undeployed"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-runtime": "0.16.0",

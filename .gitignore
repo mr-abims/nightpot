@@ -61,20 +61,20 @@ temp/
 # Midnight wallet sync state (per-network serialized wallet state cache)
 .midnight-wallet-state/
 
-# NightPot spike output
+# NightPot end-to-end run output
+e2e-result.json
 spike-result.json
 managed/
 web/node_modules/
 web/dist/
 web/public/zk/
 
-# NightPot web build artifacts
-web/public/keys/
-web/public/zkir/
-web/src/generated/
+# NightPot web build artifacts (compiled keys and contract under web/ are committed for hosted builds)
 web/.vite/
 
 # Contract work-in-progress while the Preprod run uses managed/
 .dev-dl/
 spike.log
 spike-local.log
+e2e.log
+e2e-local.log
