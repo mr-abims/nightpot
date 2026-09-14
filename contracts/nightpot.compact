@@ -1,127 +1,157 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  NightPot — a private rotating savings pot (ajo / esusu / chama / tanda / susu)
+//  NightPot — a rotating savings pot (ajo / esusu / chama / tanda / susu)
 //
-//  A fixed group pays the same amount every round; each round one member takes
-//  the whole pot; the rotation continues until everyone has had a turn.
+//  A fixed group pays the same amount of NIGHT every round; each round one
+//  member takes the whole pot; the rotation continues until everyone has had a
+//  turn.
+//
+//  MONEY (Wave 1): contributions and payouts are unshielded NIGHT. Unshielded
+//  transfers are public on Midnight: the paying wallet, the receiving wallet,
+//  and the amounts can be seen. Wave 2 moves the pot to shielded tokens.
 //
 //  WHAT IS PUBLIC (ledger):
-//    • pot parameters (size, contribution, token, schedule), phase, round, how
-//      many members have paid this round, how many payments were missed, and
-//      the pot coin itself.
-//    • member leaves — hidden on insert into the HistoricMerkleTree.
-//    • nullifiers — one-way tags that stop double contributions and double
-//      payouts without saying who produced them.
+//    • pot parameters (size, contribution, schedule), phase, round, memberCount,
+//      how many members have paid this round, missed-payment and skipped-round
+//      counts, and the NIGHT held in the pot.
+//    • details — a salted SHA-256 commitment to the pot's name and goal; the
+//      text itself travels only in the invite link.
+//    • member leaf entries — hidden on insert into the HistoricMerkleTree.
+//    • one-time tags — a join tag per member, a contribution tag per seat and
+//      round, and a payout tag per round. They stop double joins, double
+//      payments, and double payouts, and are domain-separated per purpose and
+//      per pot so they cannot be linked to each other.
 //
 //  WHAT IS PRIVATE (witnesses, never leave the member's device):
 //    • memberSecret() — the member's 32-byte secret.
 //    • memberSlot()   — which turn in the rotation belongs to the member.
+//    • memberPayout() — the wallet address bound to the seat at join time
+//                       (revealed only when that seat's payout is sent).
 //    • memberPath()   — the Merkle path proving the member's leaf is in the pot.
 //
-//  WHAT A MEMBER PROVES WITHOUT REVEALING IT:
-//    "I am one of this pot's members" (contribute), and
-//    "I am the member whose turn it is" (claimPayout).
+//  WHAT A MEMBER PROVES WITHOUT REVEALING THE SECRET:
+//    "I hold a seat in this pot" (contribute), and
+//    "I hold the seat whose turn it is" (claimPayout).
+//
+//  KNOWN WAVE 1 LIMITS:
+//    • Seats are assigned in join order and seat r is paid in round r, so the
+//      turn order follows public join order. Together with public NIGHT
+//      payouts, an observer can tell which wallet was paid in which round.
+//      Wave 2 adds a fair, hidden ordering and a shielded pot.
 //
 //  SCHEDULE (so one member who stops paying cannot freeze everyone):
 //    • Seats must be filled before joinDeadline, or anyone may cancel the pot.
 //    • Round r is due at joinDeadline + (r + 1) * roundLength.
 //    • Once a round is due, its recipient may claim whatever was paid; the
-//      number of missed payments is recorded, never whose they were.
+//      number of missed payments is recorded.
 //    • If the recipient has not claimed one roundLength after the due time,
-//      anyone may skip the round; the pot rolls into the next round.
+//      anyone may skip the round and the pot rolls into the next round. The
+//      final round cannot be skipped, so its NIGHT can always be claimed.
 //
 //  SEAMS FOR LATER WAVES:
 //    • Slot assignment lives only in join()   → Wave 2 commit-reveal fair order.
-//    • Nullifier domains are versioned (v1)    → Wave 2 collateral + private refunds.
+//    • Money moves in contribute/claimPayout  → Wave 2 shielded pot (potBalance
+//      must then stop being a public running total).
+//    • Tag domains are versioned (v2)          → Wave 2 collateral + private refunds.
 // ─────────────────────────────────────────────────────────────────────────────
 
 pragma language_version >= 0.23;
 
 import CompactStandardLibrary;
 
+// forming:   seats open until joinDeadline; only join() and, after the deadline, cancel()
+// active:    every seat taken; contribute(), claimPayout(), skipRound()
+// completed: every round has been paid out or skipped (terminal)
+// cancelled: seats did not fill by joinDeadline; no NIGHT was ever held (terminal)
 export enum Phase { forming, active, completed, cancelled }
 
 // ─── Public ledger state ─────────────────────────────────────────────────────
 
 export ledger phase: Phase;
 export sealed ledger maxMembers: Uint<16>;
+// Each round's contribution, in the smallest NIGHT unit (1 NIGHT = 1,000,000).
 export sealed ledger contribution: Uint<64>;
 export sealed ledger joinDeadline: Uint<64>;
 export sealed ledger roundLength: Uint<64>;
-// Set when the pot activates. It cannot be computed in the constructor: the
-// contract address is derived from the deploy transaction, so kernel.self()
-// is not yet the final address there.
-export ledger potColor: Bytes<32>;
+// Commitment to the pot's name and goal. Members' apps recompute it from the
+// invite link and compare, so the name is verifiable without being public.
+export sealed ledger details: Bytes<32>;
 
-export ledger members: HistoricMerkleTree<10, Bytes<32>>;
+// Depth 8 holds 256 leaves, headroom over the 64-member cap. The same depth is
+// used by the memberPath witness and merkleTreePathRoot in proveMembership;
+// all three must match.
+export ledger members: HistoricMerkleTree<8, Bytes<32>>;
+// Seats taken so far; the next joiner gets seat memberCount. Always <= maxMembers.
 export ledger memberCount: Uint<16>;
+// The current round, which is also the seat whose turn it is.
 export ledger round: Uint<16>;
+// Members who have paid in the current round. Reset when the round closes.
 export ledger paidThisRound: Uint<16>;
 
+// One tag per member secret per pot: a secret can take only one seat.
+export ledger joined: Set<Bytes<32>>;
+// Tags for every round accumulate here; the round (and seat) is inside each tag.
 export ledger contributions: Set<Bytes<32>>;
 export ledger payouts: Set<Bytes<32>>;
 
-// Accountability without identities: counts only.
 export ledger missedPayments: Counter;
 export ledger skippedRounds: Counter;
 
-export ledger pot: QualifiedShieldedCoinInfo;
-export ledger potHasCoin: Boolean;
-
-// Test-token faucet (Wave 1 only, so judges can try the pot without a real asset).
-export ledger mintNonce: Bytes<32>;
-export ledger mintCount: Counter;
+// NIGHT held for the current round, including anything rolled over from a skipped round.
+export ledger potBalance: Uint<128>;
 
 // ─── Private witnesses ───────────────────────────────────────────────────────
 
 witness memberSecret(): Bytes<32>;
 witness memberSlot(): Uint<16>;
-witness memberPath(leaf: Bytes<32>): MerkleTreePath<10, Bytes<32>>;
+// The wallet address this member's payouts go to, bound into the seat at join.
+witness memberPayout(): UserAddress;
+// leaf: the entry this member expects to find (see memberLeaf). The TypeScript
+// implementation looks the path up in the public tree and fails if it is absent.
+witness memberPath(leaf: Bytes<32>): MerkleTreePath<8, Bytes<32>>;
 
 // ─── Constructor ─────────────────────────────────────────────────────────────
 
-constructor(size: Uint<16>, amount: Uint<64>, nonceSeed: Bytes<32>, joinBy: Uint<64>, roundSeconds: Uint<64>) {
+constructor(size: Uint<16>, amount: Uint<64>, joinBy: Uint<64>, roundSeconds: Uint<64>, detailsCommitment: Bytes<32>) {
   assert(size >= 2, "NightPot: a pot needs at least two members");
   assert(size <= 64, "NightPot: a pot can have at most 64 members");
   assert(amount > 0, "NightPot: contribution must be positive");
   assert(roundSeconds >= 60, "NightPot: a round must last at least a minute");
+  // Keeps roundDeadline arithmetic far from Uint<64> limits for up to 64 rounds.
+  assert(roundSeconds <= 31536000, "NightPot: a round can last at most a year");
   maxMembers = disclose(size);
   contribution = disclose(amount);
   joinDeadline = disclose(joinBy);
   roundLength = disclose(roundSeconds);
+  details = disclose(detailsCommitment);
   phase = Phase.forming;
   memberCount = 0;
   round = 0;
   paidThisRound = 0;
-  potHasCoin = false;
-  mintNonce = disclose(nonceSeed);
+  potBalance = 0;
 }
 
 // ─── Circuits ────────────────────────────────────────────────────────────────
 
-// Mint one contribution's worth of the pot's test token to the caller.
-export circuit mintTestTokens(): ShieldedCoinInfo {
-  mintCount.increment(1);
-  const nonce = evolveNonce(mintCount.read() as Uint<128>, mintNonce);
-  mintNonce = nonce;
-  return mintShieldedToken(
-    pad(32, "nightpot:tpot"),
-    contribution,
-    nonce,
-    left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey())
-  );
-}
-
-// Take the next free slot. The leaf commits to (secret, slot) and is hidden
-// on insert, so the ledger never learns who holds which turn.
+// Take the next free seat.
+// Requires: phase forming, before joinDeadline, this secret has not joined yet.
+// Effects: records the join tag; inserts the hidden leaf H(pot, secret, seat,
+// payout address); activates the pot when the last seat is taken.
 export circuit join(): [] {
   assert(phase == Phase.forming, "NightPot: pot is not accepting members");
   assert(blockTimeLt(joinDeadline), "NightPot: joining has closed");
+  const sk = memberSecret();
+  const potId = kernel.self().bytes;
+
+  const tag = joinTag(sk, potId);
+  assert(!joined.member(disclose(tag)), "NightPot: this member already holds a seat in this pot");
+  joined.insert(disclose(tag));
+
   const slot = memberCount;
-  members.insert(disclose(memberLeaf(memberSecret(), slot)));
-  memberCount = (memberCount + 1) as Uint<16>;
-  if (memberCount == maxMembers) {
+  members.insert(disclose(memberLeaf(sk, slot, memberPayout().bytes, potId)));
+  const newCount = (slot + 1) as Uint<16>;
+  memberCount = newCount;
+  if (newCount == maxMembers) {
     phase = Phase.active;
-    potColor = tokenType(pad(32, "nightpot:tpot"), kernel.self());
   }
 }
 
@@ -133,57 +163,62 @@ export circuit cancel(): [] {
   phase = Phase.cancelled;
 }
 
-// Pay this round's contribution into the pot, anonymously.
-export circuit contribute(coin: ShieldedCoinInfo): [] {
-  assert(phase == Phase.active, "NightPot: pot is not active");
+// Pay this round's contribution of NIGHT into the pot.
+// Requires: phase active, a valid seat, this seat has not paid this round.
+// Effects: records the seat's contribution tag, takes `contribution` NIGHT from
+// the caller's wallet, adds it to potBalance.
+export circuit contribute(): [] {
+  requireActive();
   const sk = memberSecret();
-  proveMembership(sk, memberSlot());
+  const slot = memberSlot();
+  const potId = kernel.self().bytes;
+  proveMembership(sk, slot, memberPayout().bytes, potId);
 
-  const nul = contributionNullifier(sk, round, kernel.self().bytes);
+  const nul = contributionNullifier(sk, slot, round, potId);
   assert(!contributions.member(disclose(nul)), "NightPot: already contributed this round");
-  assert(disclose(coin.color == potColor), "NightPot: wrong token");
-  assert(disclose(coin.value == contribution as Uint<128>), "NightPot: wrong contribution amount");
-
   contributions.insert(disclose(nul));
-  receiveShielded(disclose(coin));
-  if (!potHasCoin) {
-    pot.writeCoin(disclose(coin), right<ZswapCoinPublicKey, ContractAddress>(kernel.self()));
-    potHasCoin = true;
-  } else {
-    pot.writeCoin(
-      mergeCoinImmediate(pot, disclose(coin)),
-      right<ZswapCoinPublicKey, ContractAddress>(kernel.self())
-    );
-  }
+
+  const amount = contribution as Uint<128>;
+  receiveUnshielded(nativeToken(), amount);
+  potBalance = (potBalance + amount) as Uint<128>;
   paidThisRound = (paidThisRound + 1) as Uint<16>;
 }
 
-// The member whose turn it is pulls the pot to their own shielded key: the
-// full pot once everyone has paid, or whatever was paid once the round is due.
-export circuit claimPayout(): ShieldedCoinInfo {
-  assert(phase == Phase.active, "NightPot: pot is not active");
+// Send the pot to the payout address bound to the seat whose turn it is.
+// Requires: phase active; every seat paid, or the round is due; NIGHT in the pot;
+// the caller holds seat `round`.
+// Effects: records the payout tag, sends all of potBalance to that seat's bound
+// address (never an address chosen at claim time), resets, advances the round.
+export circuit claimPayout(): [] {
+  requireActive();
+  const r = round;
   assert(
-    paidThisRound == maxMembers || blockTimeGte(roundDeadline(round)),
+    paidThisRound == maxMembers || blockTimeGte(roundDeadline(r)),
     "NightPot: round is not fully funded"
   );
-  assert(potHasCoin, "NightPot: nothing was paid this round");
+  assert(potBalance > 0, "NightPot: nothing was paid this round");
   const sk = memberSecret();
-  proveMembership(sk, round);
+  const payout = memberPayout();
+  const potId = kernel.self().bytes;
+  // The seat index and the round share an index space: seat r is paid in round r.
+  proveMembership(sk, r, payout.bytes, potId);
 
-  const nul = payoutNullifier(sk, round, kernel.self().bytes);
+  const nul = payoutNullifier(sk, r, potId);
   assert(!payouts.member(disclose(nul)), "NightPot: payout already claimed");
   payouts.insert(disclose(nul));
 
-  const result = sendShielded(pot, left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey()), pot.value);
-  potHasCoin = false;
+  sendUnshielded(nativeToken(), potBalance, right<ContractAddress, UserAddress>(disclose(payout)));
+  potBalance = 0;
   closeRound();
-  return result.sent;
 }
 
 // Keep the rotation moving when a recipient never claims. Whatever sits in the
 // pot rolls into the next round; the absent recipient forfeits their turn.
+// The final round cannot be skipped: there is no next round to roll into, so
+// its recipient can always claim it late instead.
 export circuit skipRound(): [] {
-  assert(phase == Phase.active, "NightPot: pot is not active");
+  requireActive();
+  assert(round + 1 < maxMembers, "NightPot: the final round cannot be skipped");
   assert(
     blockTimeGte((roundDeadline(round) + roundLength) as Uint<64>),
     "NightPot: the recipient can still claim this round"
@@ -194,16 +229,23 @@ export circuit skipRound(): [] {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-// Record missed payments (a count, never whose), reset, and advance.
+circuit requireActive(): [] {
+  assert(phase == Phase.active, "NightPot: pot is not active");
+}
+
+// Record missed payments (a count), reset, and advance.
 circuit closeRound(): [] {
-  if (paidThisRound < maxMembers) {
-    missedPayments.increment((maxMembers - paidThisRound) as Uint<16>);
+  const paid = paidThisRound;
+  const size = maxMembers;
+  if (paid < size) {
+    missedPayments.increment((size - paid) as Uint<16>);
   }
   paidThisRound = 0;
-  if (round + 1 == maxMembers) {
+  const r = round;
+  if (r + 1 == size) {
     phase = Phase.completed;
   } else {
-    round = (round + 1) as Uint<16>;
+    round = (r + 1) as Uint<16>;
   }
 }
 
@@ -213,30 +255,45 @@ circuit roundDeadline(r: Uint<16>): Uint<64> {
   return (joinDeadline + ((r as Uint<64>) + 1) * roundLength) as Uint<64>;
 }
 
-circuit proveMembership(sk: Bytes<32>, slot: Uint<16>): [] {
-  const leaf = memberLeaf(sk, slot);
+// Proves that the caller's (secret, seat, payout address) entry is in this pot's
+// tree without revealing which entry. The witness supplies a Merkle path; the
+// circuit checks that the path is for exactly this entry, then checks its root
+// against the on-chain tree. Used by contribute() with the member's own seat
+// and by claimPayout() with seat = round.
+circuit proveMembership(sk: Bytes<32>, slot: Uint<16>, payout: Bytes<32>, potId: Bytes<32>): [] {
+  const leaf = memberLeaf(sk, slot, payout, potId);
   const path = memberPath(leaf);
-  assert(disclose(path.leaf == leaf), "NightPot: membership proof is for a different member");
+  assert(path.leaf == leaf, "NightPot: membership proof is for a different member");
   assert(
-    members.checkRoot(disclose(merkleTreePathRoot<10, Bytes<32>>(path))),
+    members.checkRoot(disclose(merkleTreePathRoot<8, Bytes<32>>(path))),
     "NightPot: not a member of this pot"
   );
 }
 
-export circuit memberLeaf(sk: Bytes<32>, slot: Uint<16>): Bytes<32> {
+// The pure helpers below are exported so apps and tests can recompute the same
+// entries and tags off-chain (for example to look up a Merkle path, or to check
+// whether a seat has paid) without a proof or a transaction.
+
+export pure circuit memberLeaf(sk: Bytes<32>, slot: Uint<16>, payout: Bytes<32>, potId: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<5, Bytes<32>>>(
+    [pad(32, "nightpot:member:v2"), potId, sk, (slot as Field) as Bytes<32>, payout]
+  );
+}
+
+export pure circuit joinTag(sk: Bytes<32>, potId: Bytes<32>): Bytes<32> {
   return persistentHash<Vector<3, Bytes<32>>>(
-    [pad(32, "nightpot:member:v1"), sk, (slot as Field) as Bytes<32>]
+    [pad(32, "nightpot:joined:v2"), potId, sk]
   );
 }
 
-export circuit contributionNullifier(sk: Bytes<32>, r: Uint<16>, potId: Bytes<32>): Bytes<32> {
-  return persistentHash<Vector<4, Bytes<32>>>(
-    [pad(32, "nightpot:contrib:v1"), potId, (r as Field) as Bytes<32>, sk]
+export pure circuit contributionNullifier(sk: Bytes<32>, slot: Uint<16>, r: Uint<16>, potId: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<5, Bytes<32>>>(
+    [pad(32, "nightpot:contrib:v2"), potId, (slot as Field) as Bytes<32>, (r as Field) as Bytes<32>, sk]
   );
 }
 
-export circuit payoutNullifier(sk: Bytes<32>, r: Uint<16>, potId: Bytes<32>): Bytes<32> {
+export pure circuit payoutNullifier(sk: Bytes<32>, r: Uint<16>, potId: Bytes<32>): Bytes<32> {
   return persistentHash<Vector<4, Bytes<32>>>(
-    [pad(32, "nightpot:payout:v1"), potId, (r as Field) as Bytes<32>, sk]
+    [pad(32, "nightpot:payout:v2"), potId, (r as Field) as Bytes<32>, sk]
   );
 }
