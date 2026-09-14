@@ -5,22 +5,25 @@
  * code path the chain executes — without a node, a wallet, or a proof server.
  * Several members share one ledger; each call runs with that member's private
  * state swapped in, exactly as each member's own device would. The block clock
- * is controllable so round deadlines can be tested.
+ * is controllable so round deadlines can be tested, and witnesses can be
+ * replaced to exercise the contract's own checks against a dishonest prover.
  */
 import { Buffer } from 'node:buffer';
-import { randomBytes } from 'node:crypto';
 
 import {
   type CircuitContext,
   CostModel,
   QueryContext,
   createConstructorContext,
+  encodeUserAddress,
   sampleContractAddress,
+  sampleUserAddress,
 } from '@midnight-ntwrk/compact-runtime';
 
 import {
   Contract,
   type Ledger,
+  type Witnesses,
   ledger,
   pureCircuits,
 } from '../managed/nightpot/contract/index.js';
@@ -30,6 +33,9 @@ import {
   type NightPotPrivateState,
 } from '../src/witnesses.js';
 
+// Compile-time check: the witnesses satisfy the contract's generated witness type.
+const honestWitnesses: Witnesses<NightPotPrivateState> = witnesses;
+
 /** Zswap coin public key stand-in for the simulated caller. */
 const TEST_COIN_PUBLIC_KEY = '0'.repeat(64);
 
@@ -38,22 +44,26 @@ export const T0 = 1_800_000_000n;
 export const JOIN_WINDOW = 3_600n;
 export const ROUND_SECONDS = 86_400n;
 
-export type ShieldedCoin = { nonce: Uint8Array; color: Uint8Array; value: bigint };
-
-/** A pot member as their own device sees them. */
+/** A member as their own device sees them: a secret, a wallet, and (once joined) a seat. */
 export type Member = {
   readonly name: string;
   readonly secretKey: Uint8Array;
-  slot: bigint;
+  /** The wallet's address as the ledger prints it (hex). */
+  readonly walletHex: string;
+  /** The same address as the contract's UserAddress bytes. */
+  readonly wallet: Uint8Array;
+  slot?: bigint;
 };
 
-export const member = (name: string, byteHex: string): Member => ({
+export const member = (name: string, byteHex: string, walletHex: string = sampleUserAddress()): Member => ({
   name,
   secretKey: Uint8Array.from(Buffer.from(byteHex.repeat(32), 'hex')),
-  slot: 0n,
+  walletHex,
+  wallet: encodeUserAddress(walletHex),
 });
 
 export type PotOptions = {
+  details?: Uint8Array;
   joinBy?: bigint;
   roundSeconds?: bigint;
   now?: bigint;
@@ -65,17 +75,20 @@ export class NightPotSimulator {
   circuitContext: CircuitContext<NightPotPrivateState>;
 
   constructor(size: bigint, contribution: bigint, options: PotOptions = {}) {
-    this.contract = new Contract<NightPotPrivateState>(witnesses as any);
+    this.contract = new Contract<NightPotPrivateState>(honestWitnesses);
     this.address = sampleContractAddress();
 
     const { currentPrivateState, currentContractState, currentZswapLocalState } =
       this.contract.initialState(
-        createConstructorContext(createNightPotPrivateState(new Uint8Array(32)), TEST_COIN_PUBLIC_KEY),
+        createConstructorContext(
+          createNightPotPrivateState(new Uint8Array(32), new Uint8Array(32)),
+          TEST_COIN_PUBLIC_KEY,
+        ),
         size,
         contribution,
-        new Uint8Array(32).fill(7),
         options.joinBy ?? T0 + JOIN_WINDOW,
         options.roundSeconds ?? ROUND_SECONDS,
+        options.details ?? new Uint8Array(32).fill(5),
       );
 
     this.circuitContext = {
@@ -104,14 +117,14 @@ export class NightPotSimulator {
     return l.joinDeadline + (r + 1n) * l.roundLength;
   }
 
-  /** The pot's identifier as used inside nullifiers. */
+  /** The pot's identifier as used inside leaves and tags. */
   public get potId(): Uint8Array {
     return Uint8Array.from(Buffer.from(this.address, 'hex'));
   }
 
   /** Run the next call as `m`, with m's private state on "their device". */
   private as(m: Member): void {
-    this.circuitContext.currentPrivateState = createNightPotPrivateState(m.secretKey, m.slot);
+    this.circuitContext.currentPrivateState = createNightPotPrivateState(m.secretKey, m.wallet, m.slot);
   }
 
   public join(m: Member): Ledger {
@@ -133,30 +146,37 @@ export class NightPotSimulator {
     return this.getLedger();
   }
 
-  /** A coin of exactly this pot's token and contribution amount. */
-  public validCoin(): ShieldedCoin {
-    const state = this.getLedger();
-    return { nonce: Uint8Array.from(randomBytes(32)), color: state.potColor, value: state.contribution };
-  }
-
-  public contribute(m: Member, coin: ShieldedCoin = this.validCoin()): Ledger {
+  public contribute(m: Member, using: Witnesses<NightPotPrivateState> = honestWitnesses): Ledger {
     this.as(m);
-    this.circuitContext = this.contract.impureCircuits.contribute(this.circuitContext, coin).context;
+    const contract = using === honestWitnesses ? this.contract : new Contract<NightPotPrivateState>(using);
+    this.circuitContext = contract.impureCircuits.contribute(this.circuitContext).context;
     return this.getLedger();
   }
 
-  public claimPayout(m: Member): ShieldedCoin {
+  /** Claims as `m` and returns the NIGHT the contract authorised to each wallet in this call. */
+  public claimPayout(m: Member, using: Witnesses<NightPotPrivateState> = honestWitnesses): Map<string, bigint> {
+    const before = this.unshieldedSpends();
     this.as(m);
-    const { context, result } = this.contract.impureCircuits.claimPayout(this.circuitContext);
-    this.circuitContext = context;
-    return result;
+    const contract = using === honestWitnesses ? this.contract : new Contract<NightPotPrivateState>(using);
+    this.circuitContext = contract.impureCircuits.claimPayout(this.circuitContext).context;
+    const after = this.unshieldedSpends();
+    const paid = new Map<string, bigint>();
+    for (const [wallet, amount] of after) {
+      const delta = amount - (before.get(wallet) ?? 0n);
+      if (delta > 0n) paid.set(wallet, delta);
+    }
+    return paid;
   }
 
-  public mintTestTokens(m: Member): ShieldedCoin {
-    this.as(m);
-    const { context, result } = this.contract.impureCircuits.mintTestTokens(this.circuitContext);
-    this.circuitContext = context;
-    return result;
+  /** Unshielded NIGHT the contract has authorised to user wallets so far, by wallet hex. */
+  public unshieldedSpends(): Map<string, bigint> {
+    const totals = new Map<string, bigint>();
+    for (const [[, recipient], amount] of this.circuitContext.currentQueryContext.effects.claimedUnshieldedSpends) {
+      if (recipient.tag === 'user') {
+        totals.set(recipient.address, (totals.get(recipient.address) ?? 0n) + amount);
+      }
+    }
+    return totals;
   }
 
   /** Every member of `members` pays this round. */
@@ -165,15 +185,21 @@ export class NightPotSimulator {
     return this.getLedger();
   }
 
-  public static leaf(m: Member, slot: bigint = m.slot): Uint8Array {
-    return pureCircuits.memberLeaf(m.secretKey, slot);
+  public leaf(m: Member, slot: bigint = m.slot ?? 0n, wallet: Uint8Array = m.wallet): Uint8Array {
+    return pureCircuits.memberLeaf(m.secretKey, slot, wallet, this.potId);
   }
 
-  public contributionNullifier(m: Member, round: bigint): Uint8Array {
-    return pureCircuits.contributionNullifier(m.secretKey, round, this.potId);
+  public joinTag(m: Member): Uint8Array {
+    return pureCircuits.joinTag(m.secretKey, this.potId);
+  }
+
+  public contributionNullifier(m: Member, round: bigint, slot: bigint = m.slot ?? 0n): Uint8Array {
+    return pureCircuits.contributionNullifier(m.secretKey, slot, round, this.potId);
   }
 
   public payoutNullifier(m: Member, round: bigint): Uint8Array {
     return pureCircuits.payoutNullifier(m.secretKey, round, this.potId);
   }
 }
+
+export { honestWitnesses };

@@ -1,19 +1,30 @@
 /**
  * Tests for the NightPot contract.
  *
- * Four things are worth proving about a private savings pot:
+ * What we prove about a savings pot:
  *   1. the rotation works end to end and every rule is enforced (logic),
- *   2. the public ledger evolves correctly round by round (state),
- *   3. one member who stops paying cannot freeze everyone (schedule),
- *   4. member secrets and slots never reach public state (privacy).
+ *   2. the ledger and the NIGHT paid out are right round by round (state and money),
+ *   3. the contract's own checks hold against a dishonest prover (adversarial),
+ *   4. one member who stops paying cannot freeze everyone (schedule),
+ *   5. member secrets never reach public state (privacy).
  */
 import { Buffer } from 'node:buffer';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { Phase } from '../managed/nightpot/contract/index.js';
-import { JOIN_WINDOW, NightPotSimulator, ROUND_SECONDS, T0, member, type Member } from './nightpot-simulator.js';
+import { NOT_A_MEMBER } from '../src/witnesses.js';
+import {
+  JOIN_WINDOW,
+  NightPotSimulator,
+  ROUND_SECONDS,
+  T0,
+  honestWitnesses,
+  member,
+  type Member,
+} from './nightpot-simulator.js';
 
-const CONTRIBUTION = 100n;
+/** 1 NIGHT in its smallest unit. */
+const CONTRIBUTION = 1_000_000n;
 const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
 
 let alice: Member;
@@ -38,7 +49,7 @@ const activePot = (): NightPotSimulator => {
 };
 
 describe('constructor', () => {
-  it('opens a forming pot with the chosen size, contribution, and schedule', () => {
+  it('opens a forming pot with the chosen size, contribution, schedule, and details', () => {
     const state = new NightPotSimulator(3n, CONTRIBUTION).getLedger();
 
     expect(state.phase).toEqual(Phase.forming);
@@ -46,13 +57,29 @@ describe('constructor', () => {
     expect(state.contribution).toEqual(CONTRIBUTION);
     expect(state.joinDeadline).toEqual(T0 + JOIN_WINDOW);
     expect(state.roundLength).toEqual(ROUND_SECONDS);
+    expect(hex(state.details)).toEqual('05'.repeat(32));
     expect(state.memberCount).toEqual(0n);
     expect(state.round).toEqual(0n);
     expect(state.paidThisRound).toEqual(0n);
     expect(state.missedPayments).toEqual(0n);
     expect(state.skippedRounds).toEqual(0n);
-    expect(state.potHasCoin).toBe(false);
-    expect(state.potColor).toHaveLength(32);
+    expect(state.potBalance).toEqual(0n);
+  });
+
+  it('starts with no members, join tags, contributions, or payouts', () => {
+    const state = new NightPotSimulator(3n, CONTRIBUTION).getLedger();
+
+    expect(state.members.firstFree()).toEqual(0n);
+    expect(state.joined.size()).toEqual(0n);
+    expect(state.contributions.size()).toEqual(0n);
+    expect(state.payouts.size()).toEqual(0n);
+  });
+
+  it('stores the details commitment, never the name itself', () => {
+    const commitment = new Uint8Array(32).fill(0xab);
+    const state = new NightPotSimulator(3n, CONTRIBUTION, { details: commitment }).getLedger();
+
+    expect(hex(state.details)).toEqual('ab'.repeat(32));
   });
 
   it('rejects a pot with fewer than two members', () => {
@@ -72,10 +99,16 @@ describe('constructor', () => {
       'NightPot: a round must last at least a minute',
     );
   });
+
+  it('rejects rounds longer than a year', () => {
+    expect(() => new NightPotSimulator(3n, CONTRIBUTION, { roundSeconds: 31_536_001n })).toThrow(
+      'NightPot: a round can last at most a year',
+    );
+  });
 });
 
 describe('join', () => {
-  it('assigns slots in join order and counts members', () => {
+  it('assigns seats in join order and counts members', () => {
     const pot = new NightPotSimulator(3n, CONTRIBUTION);
 
     expect(pot.join(alice).memberCount).toEqual(1n);
@@ -84,6 +117,7 @@ describe('join', () => {
     expect(alice.slot).toEqual(0n);
     expect(bob.slot).toEqual(1n);
     expect(pot.getLedger().phase).toEqual(Phase.forming);
+    expect(pot.getLedger().joined.member(pot.joinTag(alice))).toBe(true);
   });
 
   it('activates the pot when the last seat is taken', () => {
@@ -94,14 +128,15 @@ describe('join', () => {
     expect(state.round).toEqual(0n);
   });
 
-  it('fixes the pot token when the pot activates', () => {
-    const pot = new NightPotSimulator(3n, CONTRIBUTION);
-    pot.join(alice);
-    expect(hex(pot.getLedger().potColor)).toEqual('00'.repeat(32));
+  it('fills and activates a pot at the 64-member maximum', () => {
+    const pot = new NightPotSimulator(64n, CONTRIBUTION);
+    for (let i = 0; i < 64; i++) {
+      pot.join(member(`m${i}`, (i + 16).toString(16).padStart(2, '0')));
+    }
 
-    pot.join(bob);
-    pot.join(carol);
-    expect(hex(pot.getLedger().potColor)).not.toEqual('00'.repeat(32));
+    const state = pot.getLedger();
+    expect(state.memberCount).toEqual(64n);
+    expect(state.phase).toEqual(Phase.active);
   });
 
   it('rejects joining a full pot', () => {
@@ -111,31 +146,32 @@ describe('join', () => {
     expect(pot.getLedger().memberCount).toEqual(3n);
   });
 
-  it('puts each member in the tree without publishing who they are', () => {
+  it('rejects the same secret taking a second seat', () => {
+    const pot = new NightPotSimulator(3n, CONTRIBUTION);
+    pot.join(mallory);
+    const secondSeat: Member = { ...mallory, slot: undefined };
+
+    expect(() => pot.join(secondSeat)).toThrow('NightPot: this member already holds a seat in this pot');
+    expect(pot.getLedger().memberCount).toEqual(1n);
+  });
+
+  it('rejects the same secret taking a second seat with a different payout wallet', () => {
+    const pot = new NightPotSimulator(3n, CONTRIBUTION);
+    pot.join(mallory);
+    const sameSecretOtherWallet = member('mallory-2', 'dd');
+
+    expect(() => pot.join(sameSecretOtherWallet)).toThrow('NightPot: this member already holds a seat in this pot');
+  });
+
+  it('puts each seat in the tree, bound to its payout wallet, without publishing the secret', () => {
     const pot = activePot();
     const members = pot.getLedger().members;
 
     for (const m of [alice, bob, carol]) {
-      expect(members.findPathForLeaf(NightPotSimulator.leaf(m))).toBeDefined();
+      expect(members.findPathForLeaf(pot.leaf(m))).toBeDefined();
     }
-    expect(members.findPathForLeaf(NightPotSimulator.leaf(mallory, 0n))).toBeUndefined();
-  });
-});
-
-describe('mintTestTokens', () => {
-  it('mints exactly one contribution of the pot token', () => {
-    const pot = activePot();
-    const coin = pot.mintTestTokens(alice);
-
-    expect(coin.value).toEqual(CONTRIBUTION);
-    expect(hex(coin.color)).toEqual(hex(pot.getLedger().potColor));
-    expect(pot.getLedger().mintCount).toEqual(1n);
-  });
-
-  it('never reuses a coin nonce', () => {
-    const pot = new NightPotSimulator(3n, CONTRIBUTION);
-
-    expect(hex(pot.mintTestTokens(alice).nonce)).not.toEqual(hex(pot.mintTestTokens(alice).nonce));
+    expect(members.findPathForLeaf(pot.leaf(alice, 0n, bob.wallet))).toBeUndefined();
+    expect(members.findPathForLeaf(pot.leaf(mallory, 0n))).toBeUndefined();
   });
 });
 
@@ -147,19 +183,19 @@ describe('contribute', () => {
     expect(() => pot.contribute(alice)).toThrow('NightPot: pot is not active');
   });
 
-  it('adds each contribution to the pot', () => {
+  it('adds each contribution of NIGHT to the pot', () => {
     const pot = activePot();
 
-    expect(pot.contribute(alice).paidThisRound).toEqual(1n);
-    expect(pot.getLedger().potHasCoin).toBe(true);
-    expect(pot.getLedger().pot.value).toEqual(CONTRIBUTION);
+    const first = pot.contribute(alice);
+    expect(first.paidThisRound).toEqual(1n);
+    expect(first.potBalance).toEqual(CONTRIBUTION);
 
     const funded = pot.fundRound([bob, carol]);
     expect(funded.paidThisRound).toEqual(3n);
-    expect(funded.pot.value).toEqual(3n * CONTRIBUTION);
+    expect(funded.potBalance).toEqual(3n * CONTRIBUTION);
   });
 
-  it('records a nullifier for the round, not the member', () => {
+  it('records a tag for the seat and round, not the member', () => {
     const pot = activePot();
     pot.contribute(alice);
 
@@ -167,33 +203,47 @@ describe('contribute', () => {
     expect(pot.getLedger().contributions.member(pot.contributionNullifier(bob, 0n))).toBe(false);
   });
 
-  it('rejects a second contribution in the same round', () => {
+  it('rejects a second contribution from the same seat in the same round', () => {
     const pot = activePot();
     pot.contribute(alice);
 
     expect(() => pot.contribute(alice)).toThrow('NightPot: already contributed this round');
     expect(pot.getLedger().paidThisRound).toEqual(1n);
+    expect(pot.getLedger().potBalance).toEqual(CONTRIBUTION);
   });
 
   it('rejects a non-member', () => {
     const pot = activePot();
+    mallory.slot = 0n;
 
-    expect(() => pot.contribute(mallory)).toThrow(/NightPot: this member is not in the pot|not a member/);
-    expect(pot.getLedger().paidThisRound).toEqual(0n);
+    expect(() => pot.contribute(mallory)).toThrow(NOT_A_MEMBER);
+    expect(pot.getLedger().potBalance).toEqual(0n);
   });
 
-  it('rejects the wrong token', () => {
+  it('fails loudly when the device has no seat recorded', () => {
     const pot = activePot();
-    const coin = { ...pot.validCoin(), color: new Uint8Array(32).fill(9) };
+    const forgetful: Member = { ...alice, slot: undefined };
 
-    expect(() => pot.contribute(alice, coin)).toThrow('NightPot: wrong token');
+    expect(() => pot.contribute(forgetful)).toThrow('NightPot: no seat is recorded for this pot on this device');
   });
 
-  it('rejects the wrong amount', () => {
+  it('still accepts a late contribution while the overdue round is unclaimed', () => {
     const pot = activePot();
-    const coin = { ...pot.validCoin(), value: CONTRIBUTION - 1n };
+    pot.fundRound([alice, bob]);
+    pot.setTime(pot.roundDue(0n) + 1n);
 
-    expect(() => pot.contribute(alice, coin)).toThrow('NightPot: wrong contribution amount');
+    const state = pot.contribute(carol);
+    expect(state.paidThisRound).toEqual(3n);
+    expect(state.potBalance).toEqual(3n * CONTRIBUTION);
+  });
+
+  it('rejects contributions to a cancelled pot', () => {
+    const pot = new NightPotSimulator(3n, CONTRIBUTION);
+    pot.join(alice);
+    pot.setTime(T0 + JOIN_WINDOW);
+    pot.cancel();
+
+    expect(() => pot.contribute(alice)).toThrow('NightPot: pot is not active');
   });
 });
 
@@ -209,23 +259,48 @@ describe('claimPayout', () => {
     const pot = activePot();
     pot.fundRound([alice, bob, carol]);
 
-    expect(() => pot.claimPayout(bob)).toThrow(/NightPot: this member is not in the pot|not a member/);
-    expect(pot.getLedger().potHasCoin).toBe(true);
+    expect(() => pot.claimPayout(bob)).toThrow(NOT_A_MEMBER);
+    expect(pot.getLedger().potBalance).toEqual(3n * CONTRIBUTION);
   });
 
-  it('pays the whole pot to the member whose turn it is', () => {
+  it('sends the whole pot to the payout wallet bound to the seat whose turn it is', () => {
     const pot = activePot();
     pot.fundRound([alice, bob, carol]);
 
-    const payout = pot.claimPayout(alice);
+    const paid = pot.claimPayout(alice);
     const state = pot.getLedger();
 
-    expect(payout.value).toEqual(3n * CONTRIBUTION);
-    expect(state.potHasCoin).toBe(false);
+    expect([...paid.entries()]).toEqual([[alice.walletHex, 3n * CONTRIBUTION]]);
+    expect(state.potBalance).toEqual(0n);
     expect(state.paidThisRound).toEqual(0n);
     expect(state.round).toEqual(1n);
     expect(state.missedPayments).toEqual(0n);
     expect(state.payouts.member(pot.payoutNullifier(alice, 0n))).toBe(true);
+  });
+
+  it('never pays a different wallet, even to someone holding the seat secret', () => {
+    const pot = activePot();
+    pot.fundRound([alice, bob, carol]);
+    const thief: Member = { ...member('thief', 'a1'), slot: 0n };
+
+    expect(() => pot.claimPayout(thief)).toThrow(NOT_A_MEMBER);
+    expect(pot.getLedger().potBalance).toEqual(3n * CONTRIBUTION);
+  });
+
+  it('refuses a second payout once the round has been taken', () => {
+    const pot = new NightPotSimulator(2n, CONTRIBUTION);
+    pot.join(alice);
+    pot.join(bob);
+    pot.fundRound([alice, bob]);
+    pot.claimPayout(alice);
+
+    // Straight away the round has moved on and holds nothing.
+    expect(() => pot.claimPayout(alice)).toThrow('NightPot: round is not fully funded');
+    // Even once the next round is funded, the seat that was paid cannot take it.
+    pot.fundRound([alice, bob]);
+    expect(() => pot.claimPayout(alice)).toThrow(NOT_A_MEMBER);
+    expect(pot.getLedger().payouts.member(pot.payoutNullifier(alice, 0n))).toBe(true);
+    expect(pot.getLedger().potBalance).toEqual(2n * CONTRIBUTION);
   });
 
   it('lets members contribute again in the next round', () => {
@@ -236,18 +311,63 @@ describe('claimPayout', () => {
     expect(pot.contribute(alice).paidThisRound).toEqual(1n);
   });
 
-  it('completes the pot after every member has had a turn', () => {
+  it('pays every member their turn and completes the pot', () => {
     const pot = activePot();
 
     for (const recipient of [alice, bob, carol]) {
-      pot.fundRound([alice, bob, carol]);
-      expect(pot.claimPayout(recipient).value).toEqual(3n * CONTRIBUTION);
+      expect(pot.fundRound([alice, bob, carol]).potBalance).toEqual(3n * CONTRIBUTION);
+      expect([...pot.claimPayout(recipient).entries()]).toEqual([[recipient.walletHex, 3n * CONTRIBUTION]]);
     }
 
     const state = pot.getLedger();
     expect(state.phase).toEqual(Phase.completed);
     expect(state.payouts.size()).toEqual(3n);
+    expect(pot.unshieldedSpends()).toEqual(
+      new Map([
+        [alice.walletHex, 3n * CONTRIBUTION],
+        [bob.walletHex, 3n * CONTRIBUTION],
+        [carol.walletHex, 3n * CONTRIBUTION],
+      ]),
+    );
     expect(() => pot.contribute(alice)).toThrow('NightPot: pot is not active');
+  });
+});
+
+describe("the contract's own checks against a dishonest prover", () => {
+  it("rejects another member's genuine Merkle path", () => {
+    const pot = activePot();
+    mallory.slot = 0n;
+    const bobsPath = pot.getLedger().members.findPathForLeaf(pot.leaf(bob))!;
+    const hostile = { ...honestWitnesses, memberPath: ({ privateState }: any) => [privateState, bobsPath] } as typeof honestWitnesses;
+
+    expect(() => pot.contribute(mallory, hostile)).toThrow('NightPot: membership proof is for a different member');
+    expect(pot.getLedger().potBalance).toEqual(0n);
+  });
+
+  it('rejects a forged path whose root is not in the tree', () => {
+    const pot = activePot();
+    mallory.slot = 0n;
+    const hostile = {
+      ...honestWitnesses,
+      memberPath: ({ privateState }: any, leaf: Uint8Array) => {
+        const real = pot.getLedger().members.findPathForLeaf(pot.leaf(alice))!;
+        const forged = { leaf, path: real.path.map((e: any) => ({ ...e, sibling: { field: e.sibling.field + 1n } })) };
+        return [privateState, forged];
+      },
+    } as typeof honestWitnesses;
+
+    expect(() => pot.contribute(mallory, hostile)).toThrow('NightPot: not a member of this pot');
+  });
+
+  it("rejects a claim built from the recipient's real path but a different payout wallet", () => {
+    const pot = activePot();
+    pot.fundRound([alice, bob, carol]);
+    const alicesPath = pot.getLedger().members.findPathForLeaf(pot.leaf(alice))!;
+    const thief: Member = { ...member('thief', 'a1'), slot: 0n };
+    const hostile = { ...honestWitnesses, memberPath: ({ privateState }: any) => [privateState, alicesPath] } as typeof honestWitnesses;
+
+    expect(() => pot.claimPayout(thief, hostile)).toThrow('NightPot: membership proof is for a different member');
+    expect(pot.unshieldedSpends().size).toEqual(0);
   });
 });
 
@@ -285,14 +405,14 @@ describe('schedule: one member who stops paying cannot freeze the pot', () => {
 
   it('lets the recipient take what was paid once the round is due, counting the missed payment', () => {
     const pot = activePot();
-    pot.fundRound([alice, bob]);
+    expect(pot.fundRound([alice, bob]).potBalance).toEqual(2n * CONTRIBUTION);
     pot.setTime(pot.roundDue(0n));
 
-    expect(pot.claimPayout(alice).value).toEqual(2n * CONTRIBUTION);
+    expect([...pot.claimPayout(alice).entries()]).toEqual([[alice.walletHex, 2n * CONTRIBUTION]]);
     const state = pot.getLedger();
+    expect(state.potBalance).toEqual(0n);
     expect(state.round).toEqual(1n);
     expect(state.missedPayments).toEqual(1n);
-    expect(state.paidThisRound).toEqual(0n);
   });
 
   it('refuses a claim when nobody paid, even after the round is due', () => {
@@ -302,15 +422,15 @@ describe('schedule: one member who stops paying cannot freeze the pot', () => {
     expect(() => pot.claimPayout(alice)).toThrow('NightPot: nothing was paid this round');
   });
 
-  it('refuses to skip while the recipient can still claim', () => {
+  it('refuses to skip one second before the grace period ends', () => {
     const pot = activePot();
     pot.fundRound([alice, bob, carol]);
-    pot.setTime(pot.roundDue(0n));
+    pot.setTime(pot.roundDue(0n) + ROUND_SECONDS - 1n);
 
     expect(() => pot.skipRound()).toThrow('NightPot: the recipient can still claim this round');
   });
 
-  it('skips an unclaimed round after the grace period and rolls the pot forward', () => {
+  it('skips an unclaimed round after the grace period and rolls the NIGHT forward', () => {
     const pot = activePot();
     pot.fundRound([alice, bob, carol]);
     pot.setTime(pot.roundDue(0n) + ROUND_SECONDS);
@@ -318,30 +438,31 @@ describe('schedule: one member who stops paying cannot freeze the pot', () => {
     const skipped = pot.skipRound();
     expect(skipped.skippedRounds).toEqual(1n);
     expect(skipped.round).toEqual(1n);
-    expect(skipped.potHasCoin).toBe(true);
-    expect(skipped.pot.value).toEqual(3n * CONTRIBUTION);
+    expect(skipped.potBalance).toEqual(3n * CONTRIBUTION);
 
-    pot.fundRound([alice, bob, carol]);
-    expect(pot.claimPayout(bob).value).toEqual(6n * CONTRIBUTION);
+    expect(pot.fundRound([alice, bob, carol]).potBalance).toEqual(6n * CONTRIBUTION);
+    expect([...pot.claimPayout(bob).entries()]).toEqual([[bob.walletHex, 6n * CONTRIBUTION]]);
   });
 
-  it('can run a pot to completion even when nobody shows up', () => {
+  it('never skips the final round, so its NIGHT can always be claimed late', () => {
     const pot = new NightPotSimulator(2n, CONTRIBUTION);
     pot.join(alice);
     pot.join(bob);
-
+    pot.fundRound([alice, bob]);
     pot.setTime(pot.roundDue(0n) + ROUND_SECONDS);
     pot.skipRound();
-    pot.setTime(pot.roundDue(1n) + ROUND_SECONDS);
-    const state = pot.skipRound();
 
-    expect(state.phase).toEqual(Phase.completed);
-    expect(state.skippedRounds).toEqual(2n);
-    expect(state.missedPayments).toEqual(4n);
+    pot.setTime(pot.roundDue(1n) + 10n * ROUND_SECONDS);
+    expect(() => pot.skipRound()).toThrow('NightPot: the final round cannot be skipped');
+    expect(pot.getLedger().potBalance).toEqual(2n * CONTRIBUTION);
+
+    expect([...pot.claimPayout(bob).entries()]).toEqual([[bob.walletHex, 2n * CONTRIBUTION]]);
+    expect(pot.getLedger().phase).toEqual(Phase.completed);
+    expect(pot.getLedger().potBalance).toEqual(0n);
   });
 });
 
-describe('privacy: secrets and slots never reach public state', () => {
+describe('privacy: secrets never reach public state', () => {
   it('keeps every member secret out of the serialized ledger', () => {
     const pot = activePot();
     pot.fundRound([alice, bob, carol]);
@@ -356,7 +477,8 @@ describe('privacy: secrets and slots never reach public state', () => {
   it('derives unlinkable tags for the same member', () => {
     const pot = activePot();
     const tags = [
-      hex(NightPotSimulator.leaf(alice)),
+      hex(pot.leaf(alice)),
+      hex(pot.joinTag(alice)),
       hex(pot.contributionNullifier(alice, 0n)),
       hex(pot.contributionNullifier(alice, 1n)),
       hex(pot.payoutNullifier(alice, 0n)),
@@ -365,12 +487,14 @@ describe('privacy: secrets and slots never reach public state', () => {
     expect(new Set(tags).size).toEqual(tags.length);
   });
 
-  it('gives the same member different nullifiers in different pots', () => {
+  it('gives the same member different tags in different pots', () => {
     const potA = activePot();
     const potB = new NightPotSimulator(3n, CONTRIBUTION);
 
     expect(potA.address).not.toEqual(potB.address);
+    expect(hex(potA.joinTag(alice))).not.toEqual(hex(potB.joinTag(alice)));
     expect(hex(potA.contributionNullifier(alice, 0n))).not.toEqual(hex(potB.contributionNullifier(alice, 0n)));
+    expect(hex(potA.leaf(alice))).not.toEqual(hex(potB.leaf(alice)));
   });
 
   it('exposes only the documented ledger fields', () => {
@@ -378,19 +502,17 @@ describe('privacy: secrets and slots never reach public state', () => {
       [
         'contribution',
         'contributions',
+        'details',
         'joinDeadline',
+        'joined',
         'maxMembers',
         'memberCount',
         'members',
-        'mintCount',
-        'mintNonce',
         'missedPayments',
         'paidThisRound',
         'payouts',
         'phase',
-        'pot',
-        'potColor',
-        'potHasCoin',
+        'potBalance',
         'round',
         'roundLength',
         'skippedRounds',
