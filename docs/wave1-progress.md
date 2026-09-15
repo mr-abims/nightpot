@@ -84,9 +84,14 @@ indexer is in [`docs/preprod-run.json`](preprod-run.json).
 | | |
 |---|---|
 | Contribution per round | 100 tNIGHT, rounds of 30 minutes |
-| Seats filled | 1 of 3 (the creator, seated by the app right after deploying); joining open until 22:11 UTC, Sep 15 |
-| Join tags recorded | 1 (one seat per secret is enforced on-chain) |
-| Latest contract call | `1478084e1861a412…` in block 2,566,008 |
+| Outcome | **completed**: every member paid every round and every member took the pot once |
+| Seats filled | 3 of 3 (the creator was seated by the app right after deploying) |
+| Join tags recorded | 3 (one seat per secret is enforced on-chain) |
+| Contributions / payouts recorded | 9 / 3 |
+| NIGHT moved | 900 tNIGHT paid in; 300 tNIGHT paid out each round, to the wallet bound to that seat |
+| Missed payments / skipped rounds | 0 / 0 |
+| Pot balance at the end | 0 tNIGHT |
+| Final contract call | `b4873a26bff8d64c…` in block 2,566,289 |
 
 **v1 pot (before the review fixes):** `d85e811431f038a192b85315b815a932f87c11e9f0bd2e0da450fa453e3faebf`
 

@@ -4,7 +4,7 @@
   "current": {
     "contractVersion": "v2 (one seat per secret, payout wallet bound at join, final round never skipped)",
     "contract": "115707cded2df03570f1dcec362a4c21984566329c7b6e4156abfdb52fe646b3",
-    "readAt": "2026-09-15T21:48Z",
+    "readAt": "2026-09-15T22:14Z",
     "pot": {
       "members": 3,
       "contributionPerRound": "100 tNIGHT",
@@ -13,16 +13,21 @@
       "joinDeadline": "2026-09-15T22:11:50Z"
     },
     "state": {
-      "phase": "forming",
-      "seatsFilled": "1 of 3 (the creator, seated by the app right after deploying)",
-      "joinTagsRecorded": 1,
-      "contributionsRecorded": 0,
-      "payoutsClaimed": 0,
-      "potBalance": "0 tNIGHT"
+      "phase": "completed",
+      "seatsFilled": "3 of 3 (the creator was seated by the app right after deploying)",
+      "roundsPaidOut": "3 of 3",
+      "joinTagsRecorded": 3,
+      "contributionsRecorded": 9,
+      "payoutsClaimed": 3,
+      "missedPayments": 0,
+      "skippedRounds": 0,
+      "potBalance": "0 tNIGHT",
+      "tNightMoved": "900 tNIGHT paid in, 300 tNIGHT paid out per round"
     },
     "latestContractCall": {
-      "hash": "1478084e1861a412ab77ef4e8d7cbeaefd7316c09acb41417ec6aa8a4174ab04",
-      "blockHeight": 2566008
+      "hash": "b4873a26bff8d64ca436bc1762089dc3f152836289c30450fd9df9af910a8859",
+      "blockHeight": 2566289,
+      "at": "2026-09-15T22:13:12Z"
     },
     "walletsUsed": "real browser wallets through the NightPot web app"
   },

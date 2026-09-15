@@ -12,7 +12,8 @@ from a secret that never leaves their device, and a round schedule keeps the pot
 - Web app and landing page: [`web/`](web)
 - Architecture and privacy model: [`docs/architecture.md`](docs/architecture.md)
 - End-to-end devnet run: [`docs/devnet-run.json`](docs/devnet-run.json)
-- Live on Preprod: v2 pot `115707cded2d…`, plus an earlier v1 pot run through a paid round with real wallets
+- Live on Preprod: v2 pot `115707cded2d…` run to completion with real wallets (3 members, 3 rounds, 3 payouts),
+  plus an earlier v1 pot
   ([`docs/preprod-run.json`](docs/preprod-run.json))
 
 ## The problem
