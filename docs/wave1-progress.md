@@ -56,7 +56,7 @@ returns to where it started).
   payout wallet into its leaf (so a leaked secret cannot redirect a payout), forbids skipping the final round, and
   shrinks the member tree to depth 8. The app now reuses one provider set per connection, ignores stale refreshes,
   confirms the seat actually taken after a join, and retries once when another member changed the pot first. The
-  v2 contract is not compatible with pots deployed earlier, so the Preprod pot below ran on the first contract.
+  v2 contract is not compatible with pots deployed earlier, so a new v2 pot was created on Preprod.
 - **Honest privacy.** Turn order follows public join order in Wave 1, and the docs and landing page say so.
 
 ## Toolchain findings
@@ -76,17 +76,27 @@ returns to where it started).
 
 ## Live on Preprod
 
-A 3-member named pot created and run through the web app with real wallets: contract `d85e811431f038a192b85315b815a932f87c11e9f0bd2e0da450fa453e3faebf`.
-Public state read from the Preprod indexer ([`docs/preprod-run.json`](preprod-run.json)):
+Both pots were created and run through the web app with real browser wallets. Public state read from the Preprod
+indexer is in [`docs/preprod-run.json`](preprod-run.json).
+
+**v2 pot (current contract):** `115707cded2df03570f1dcec362a4c21984566329c7b6e4156abfdb52fe646b3`
+
+| | |
+|---|---|
+| Contribution per round | 100 tNIGHT, rounds of 30 minutes |
+| Seats filled | 1 of 3 (the creator, seated by the app right after deploying); joining open until 22:11 UTC, Sep 15 |
+| Join tags recorded | 1 (one seat per secret is enforced on-chain) |
+| Latest contract call | `1478084e1861a412…` in block 2,566,008 |
+
+**v1 pot (before the review fixes):** `d85e811431f038a192b85315b815a932f87c11e9f0bd2e0da450fa453e3faebf`
 
 | | |
 |---|---|
 | Contribution per round | 100 tNIGHT |
 | Seats filled | 3 of 3 (pot active) |
 | Round 1 | all 3 members paid in; the pot was claimed by seat 1 |
-| Round 2 | 1 of 3 paid so far; 100 tNIGHT in the pot |
+| Round 2 | 1 of 3 paid when read; 100 tNIGHT in the pot |
 | Contributions / payouts recorded | 4 / 1 |
-| Missed payments / skipped rounds | 0 / 0 |
 | Latest contract call | `0ce7469066d523e2…` in block 2,562,736 |
 
 ## Next (Wave 2)
