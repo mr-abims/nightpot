@@ -1,62 +1,51 @@
 {
   "network": "undeployed (local devnet: midnight-node 1.0.0, indexer 4.3.3, proof-server 8.1.0)",
   "date": "2026-09-15",
-  "contract": "97cf6f8bb7599daf612d9474d8902e53e747f01a886b39ab12f465bda9d7de0f",
+  "contractVersion": "v2: unshielded tNIGHT pot, one seat per secret, payout wallet bound at join, final round never skipped, round deadlines, private name/goal commitment",
+  "contract": "766fc3340efcac36d3763e1d54b8d9ce04aa1771ac74fa7eb442505675e1c996",
+  "contributionPerRound": "1 NIGHT (1000000 smallest units)",
   "steps": [
     {
       "step": "deploy 2-member pot",
-      "txId": "009b50181e31d4b1c6effc291e37d5eb93caa783beff55ebdeab6100f2bfaba5a0",
-      "blockHeight": 42,
-      "ms": 17875
+      "txId": "0069ebfe3a77efbdf652aec73e5c5eb3a05615a936467cf78e26a785852aded857",
+      "blockHeight": 6750,
+      "ms": 18979
     },
     {
       "step": "join as member-0",
-      "txId": "009cceebc0158e99d61b8ef5a2d6c4795d94ae487c798530c59c82e3a72a5ce692",
-      "blockHeight": 46,
-      "ms": 23895
+      "txId": "0046fd323dd10b60f29c34277b7ecc6fbe6d7bebaae634b9a418ee6d88dc70fac0",
+      "blockHeight": 6753,
+      "ms": 18527
     },
     {
       "step": "join as member-1",
-      "txId": "00501914bc458d612a944ab84375c7349d561a498f3072105a33a3fba158ce62e8",
-      "blockHeight": 49,
-      "ms": 17260
+      "txId": "00314cf5d43529ef97d2169c8940d29d9f4652a91194dc6ce8248988ccb6d17434",
+      "blockHeight": 6757,
+      "ms": 23978
     },
     {
-      "step": "mintTestTokens for member-0",
-      "txId": "008acf9bb75b56abaa8c128640307c3d3a633add376183e3d532ae98bab86600d3",
-      "blockHeight": 52,
-      "ms": 18622
+      "step": "contribute 1 NIGHT as member-0",
+      "txId": "005b4080e36e268a0da7ca9e619e9c86e9e694706fcfc3975169032c814496c498",
+      "blockHeight": 6761,
+      "ms": 23965
     },
     {
-      "step": "mintTestTokens for member-1",
-      "txId": "004691ce8d3b0972a8a743303ff30047b6253edaac547b7835c7b9bf3e60bc6ace",
-      "blockHeight": 56,
-      "ms": 24001
+      "step": "contribute 1 NIGHT as member-1",
+      "txId": "0059e1f30380262eafde0e8b9f8a73aa8ea4f4579aec61e269330a69a26f5428aa",
+      "blockHeight": 6765,
+      "ms": 22623
     },
     {
-      "step": "contribute as member-0",
-      "txId": "00571e0635fb311904c0859d79c2b1b15f8c4b2b842581d762a39bf23545e7ee94",
-      "blockHeight": 61,
-      "ms": 29231
-    },
-    {
-      "step": "contribute as member-1",
-      "txId": "006ad04bd83063f69c3e6334e7e7e5086760fa262aa3180668d0249e8b0755e104",
-      "blockHeight": 66,
-      "ms": 30639
-    },
-    {
-      "step": "claimPayout as member-0 (slot 0)",
-      "txId": "00fa474a99364ced54dcf3cbf393ebaff38a082f502a4a635376dbacf2fe427c37",
-      "blockHeight": 70,
-      "ms": 23947
+      "step": "claimPayout as member-0 (slot 0) to its bound address",
+      "txId": "00ea5c7457871ce0501c1b303a3a5001173584bae1e85da0765ed7240cf111829b",
+      "blockHeight": 6770,
+      "ms": 19069
     }
   ],
-  "final": {
-    "phase": "active",
-    "round": 1,
-    "paidThisRound": 0,
-    "potValue": 0,
-    "walletPotTokenBalance": 200
+  "payoutCheck": {
+    "walletNightBeforePayout": "249999998000000",
+    "walletNightAfterPayout": "250000000000000",
+    "received": "2000000",
+    "destination": "the address bound to seat 0 at join"
   }
 }

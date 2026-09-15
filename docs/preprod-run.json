@@ -1,0 +1,27 @@
+{
+  "network": "preprod",
+  "readAt": "2026-09-15",
+  "contract": "d85e811431f038a192b85315b815a932f87c11e9f0bd2e0da450fa453e3faebf",
+  "source": "public state read from indexer.preprod.midnight.network (api/v4)",
+  "pot": {
+    "members": 3,
+    "contributionPerRound": "100 tNIGHT",
+    "roundLengthSeconds": 1800,
+    "namedPot": true
+  },
+  "state": {
+    "phase": "active",
+    "round": "2 of 3 (index 1)",
+    "paidThisRound": 1,
+    "potBalance": "100 tNIGHT",
+    "contributionsRecorded": 4,
+    "payoutsClaimed": 1,
+    "missedPayments": 0,
+    "skippedRounds": 0
+  },
+  "latestContractCall": {
+    "hash": "0ce7469066d523e205764e6bcd39ba1596db18c17cca4755256ab9789cb9ac3f",
+    "blockHeight": 2562736
+  },
+  "walletsUsed": "real browser wallets through the NightPot web app"
+}

@@ -78,3 +78,8 @@ spike.log
 spike-local.log
 e2e.log
 e2e-local.log
+
+# Submission drafts kept local
+docs/deck-outline.md
+docs/video-script.md
+docs/screenshots/
