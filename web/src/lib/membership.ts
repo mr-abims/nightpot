@@ -2,8 +2,10 @@
  * The member's seat in each pot: a 32-byte secret and a slot number.
  *
  * This is the only thing that ties a person to a seat. It is stored in this
- * browser's localStorage and never sent anywhere; the chain sees only hashes of
- * it. Losing it means losing the ability to pay in or take the pot, so the app
+ * browser's localStorage under the pot and the wallet that took the seat, so two
+ * wallets in one browser never share a seat (sharing a secret would also make
+ * their payments collide on the same nullifier). Nothing here is sent anywhere;
+ * the chain sees only hashes of the secret. Losing it means losing the ability to pay in or take the pot, so the app
  * offers a backup and restore.
  */
 export type Membership = {
@@ -11,22 +13,28 @@ export type Membership = {
   slot: string;
   /** False between submitting join() and seeing it confirmed. */
   confirmed: boolean;
+  /** Set when the join transaction failed, so the member can try again. */
+  failed?: boolean;
+  /** When the seat was saved (ms since epoch), to let a stuck pending seat be retried. */
+  savedAt?: number;
 };
 
-const STORAGE_KEY = 'nightpot:memberships';
+const STORAGE_KEY = 'nightpot:seats:v2';
+/** Seats saved before they were linked to wallets, keyed by pot only. */
+const LEGACY_KEY = 'nightpot:memberships';
 
-const readAll = (): Record<string, Membership> => {
+const readAll = (key: string = STORAGE_KEY): Record<string, Membership> => {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(key);
     return raw ? (JSON.parse(raw) as Record<string, Membership>) : {};
   } catch {
     return {};
   }
 };
 
-const writeAll = (all: Record<string, Membership>): void => {
+const writeAll = (all: Record<string, Membership>, key: string = STORAGE_KEY): void => {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+    window.localStorage.setItem(key, JSON.stringify(all));
   } catch {
     // Storage can be unavailable (private windows); the seat still works for this session.
   }
@@ -34,16 +42,29 @@ const writeAll = (all: Record<string, Membership>): void => {
 
 const normalize = (address: string): string => address.trim().toLowerCase();
 
-export const loadMembership = (address: string): Membership | null => readAll()[normalize(address)] ?? null;
+const seatKey = (pot: string, wallet: string): string => `${normalize(pot)}|${wallet.trim()}`;
 
-export const saveMembership = (address: string, membership: Membership): void => {
-  writeAll({ ...readAll(), [normalize(address)]: membership });
+/** The seat this wallet holds in this pot on this device, if any. */
+export const loadMembership = (pot: string, wallet: string | null): Membership | null =>
+  wallet ? (readAll()[seatKey(pot, wallet)] ?? null) : null;
+
+export const saveMembership = (pot: string, wallet: string, membership: Membership): void => {
+  writeAll({ ...readAll(), [seatKey(pot, wallet)]: membership });
 };
 
-export const forgetMembership = (address: string): void => {
+export const forgetMembership = (pot: string, wallet: string): void => {
   const all = readAll();
-  delete all[normalize(address)];
+  delete all[seatKey(pot, wallet)];
   writeAll(all);
+};
+
+/** A seat saved for this pot before seats were linked to wallets. */
+export const loadLegacyMembership = (pot: string): Membership | null => readAll(LEGACY_KEY)[normalize(pot)] ?? null;
+
+export const clearLegacyMembership = (pot: string): void => {
+  const all = readAll(LEGACY_KEY);
+  delete all[normalize(pot)];
+  writeAll(all, LEGACY_KEY);
 };
 
 export const hexToBytes = (hex: string): Uint8Array => {

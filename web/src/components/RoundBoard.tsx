@@ -57,14 +57,14 @@ export function RoundBoard() {
           <Eye size={20} weight="duotone" className="mt-0.5 shrink-0 text-muted" />
           <div>
             <dt className="font-medium">The chain sees</dt>
-            <dd className="text-muted">Round {round + 1} was paid out to one of six sealed seats.</dd>
+            <dd className="text-muted">Round {round + 1} was paid out to a member's wallet.</dd>
           </div>
         </div>
         <div className="flex items-start gap-3 rounded-xl bg-accent-soft px-4 py-3">
           <DeviceMobile size={20} weight="duotone" className="mt-0.5 shrink-0 text-accent" />
           <div>
-            <dt className="font-medium">Only the winner's phone knows</dt>
-            <dd className="text-muted">That seat was theirs.</dd>
+            <dt className="font-medium">Only each member's phone holds</dt>
+            <dd className="text-muted">The secret that proves their seat.</dd>
           </div>
         </div>
       </dl>

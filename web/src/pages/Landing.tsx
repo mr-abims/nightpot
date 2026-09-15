@@ -72,7 +72,7 @@ function Hero() {
           Keep it between you.
         </motion.h1>
         <motion.p {...enter(0.12)} className="mt-6 max-w-[48ch] text-lg leading-relaxed text-muted">
-          Rotating savings circles on Midnight. Everyone pays in, one member takes the pot, and outsiders never learn who.
+          Rotating savings circles on Midnight. Everyone pays in tNIGHT, one member takes the pot, and the contract enforces every turn.
         </motion.p>
         <motion.div {...enter(0.2)} className="mt-8 flex flex-wrap gap-3">
           <Link to="/app" className={primaryCta}>
@@ -130,8 +130,7 @@ function Problem() {
       </div>
       <Reveal>
         <p className="mt-8 max-w-[65ch] text-muted">
-          Moving circles onto a public blockchain fixes the cash box but makes the exposure permanent. NightPot keeps the
-          guarantees and removes the audience.
+          Moving circles onto a public blockchain fixes the cash box but makes the exposure permanent. NightPot keeps the guarantees, and its move to shielded tokens removes the audience.
         </p>
       </Reveal>
     </section>
@@ -141,17 +140,17 @@ function Problem() {
 const steps = [
   {
     verb: 'Join',
-    body: 'Your device creates a secret and adds a sealed seat to the pot. The chain records that a seat was taken, not by whom.',
+    body: 'Your device creates a secret and adds a sealed seat, bound to your wallet so only it can receive your payout. One secret, one seat.',
     circuit: 'join()',
   },
   {
     verb: 'Pay in',
-    body: 'Each round you prove you hold a seat and pay the fixed amount in shielded tokens. A one-time tag blocks double payments without naming you.',
-    circuit: 'contribute(coin)',
+    body: 'Each round you prove you hold a seat and pay the fixed amount in tNIGHT. A one-time tag blocks double payments.',
+    circuit: 'contribute()',
   },
   {
     verb: 'Take the pot',
-    body: 'When everyone has paid, the member whose turn it is proves it and pulls the whole pot to their own shielded key.',
+    body: 'When everyone has paid, the member whose turn it is proves it and the contract sends the whole pot to their wallet.',
     circuit: 'claimPayout()',
   },
   {
@@ -192,13 +191,14 @@ const publicFacts = [
   'How many seats are filled',
   'The current round and how many members have paid',
   'One-time tags for each payment and payout',
+  'Which wallets pay in and which wallet receives each pot (Wave 1 uses public tNIGHT)',
   'How many payments were missed, never whose',
+  'The payout order, which follows the order seats were taken (fair random order arrives in Wave 2)',
 ];
 const privateFacts = [
   'Your member secret',
-  'Which seat, and so which turn, is yours',
   'The proof that you belong to the pot',
-  'That any two payments came from the same person',
+  "The pot's name and goal, shared only through the invite link",
 ];
 
 function Privacy() {
@@ -235,8 +235,8 @@ function Privacy() {
       </div>
       <Reveal>
         <p className="mt-6 max-w-[70ch] text-sm text-muted">
-          Honest limits: every member pays the same amount, so amounts reveal nothing, but the pot balance itself is public.
-          In very small pots, timing can still hint at who paid.
+          Honest limits: in Wave 1 the pot moves public tNIGHT, so the wallets that pay in and the wallet each pot is sent to
+          can be seen, which reveals whose turn came when. Wave 2 moves the pot to shielded tokens to hide that again.
         </p>
       </Reveal>
     </section>
@@ -246,8 +246,8 @@ function Privacy() {
 type Cell = 'yes' | 'no' | 'partly' | 'planned';
 const rows: { feature: string; cells: [Cell, Cell, Cell, Cell] }[] = [
   { feature: 'Members take turns receiving the pot', cells: ['yes', 'no', 'yes', 'yes'] },
-  { feature: 'Hides who pays in and who gets paid', cells: ['yes', 'partly', 'partly', 'no'] },
-  { feature: 'Contributions move as shielded tokens', cells: ['yes', 'no', 'no', 'no'] },
+  { feature: 'Hides who pays in and who gets paid', cells: ['planned', 'partly', 'partly', 'no'] },
+  { feature: 'Contributions move as shielded tokens', cells: ['planned', 'no', 'no', 'no'] },
   { feature: 'Keeps rotating when a member stops paying', cells: ['yes', 'no', 'no', 'partly'] },
   { feature: 'Private pools for group purchases and investments', cells: ['planned', 'no', 'no', 'no'] },
 ];
@@ -310,25 +310,25 @@ function Comparison() {
   );
 }
 
-const contributeExcerpt = `export circuit contribute(coin: ShieldedCoinInfo): [] {
+const contributeExcerpt = `export circuit contribute(): [] {
   assert(phase == Phase.active, "NightPot: pot is not active");
   const sk = memberSecret();              // never leaves the device
   proveMembership(sk, memberSlot());      // Merkle proof, root checked on-chain
 
   const nul = contributionNullifier(sk, round, kernel.self().bytes);
   assert(!contributions.member(disclose(nul)), "NightPot: already contributed this round");
-  assert(disclose(coin.value == contribution as Uint<128>), "NightPot: wrong contribution amount");
-
   contributions.insert(disclose(nul));
-  receiveShielded(disclose(coin));        // the pot holds shielded tokens
-  ...
+
+  receiveUnshielded(nativeToken(), contribution as Uint<128>);   // tNIGHT into the pot
+  potBalance = (potBalance + (contribution as Uint<128>)) as Uint<128>;
+  paidThisRound = (paidThisRound + 1) as Uint<16>;
 }`;
 
 const pieces = [
   { name: 'Sealed seats', detail: 'Members are hidden leaves in a HistoricMerkleTree, proven with merkleTreePathRoot.' },
   { name: 'One-time tags', detail: 'Domain-separated nullifiers per pot and round stop double payments and payouts.' },
-  { name: 'Shielded pot', detail: 'receiveShielded and sendShielded move the money; payouts are pulled to the winner’s own key.' },
-  { name: 'Your wallet', detail: 'Lace proves and signs in the browser through the Midnight DApp Connector.' },
+  { name: 'The pot', detail: 'receiveUnshielded and sendUnshielded move tNIGHT today; the shielded pot arrives in Wave 2.' },
+  { name: 'Your wallet', detail: 'Lace, 1AM, or any Midnight wallet connects through the DApp Connector to prove, sign, and pay.' },
 ];
 
 function Architecture() {
@@ -337,7 +337,7 @@ function Architecture() {
       <Reveal>
         <p className="text-sm font-medium text-accent">Built on Midnight</p>
         <h2 className="mt-3 max-w-[24ch] text-3xl font-semibold tracking-tight md:text-4xl">
-          Privacy is enforced by the contract, not promised by us.
+          Every rule is enforced by the contract, not promised by us.
         </h2>
       </Reveal>
       <div className="mt-10 grid gap-8 lg:grid-cols-[1.25fr_1fr]">
@@ -367,17 +367,17 @@ const waves = [
     dates: 'Aug 27 to Sep 16',
     status: 'Now',
     items: [
-      'Private pot contract with anonymous seats',
-      'Shielded contributions and pull payouts',
+      'Pot contract with sealed, wallet-bound seats',
+      'Contributions and payouts in tNIGHT',
       'Round deadlines so no one can freeze a pot',
-      'Lace app on Preprod',
+      'Wallet app on Preprod for Lace, 1AM, and more',
     ],
   },
   {
     wave: 'Wave 2',
     dates: 'Sep 27 to Oct 17',
     status: 'Next',
-    items: ['Fair random payout order', 'Pooled collateral with private refunds', 'Pot invites and discovery'],
+    items: ['Shielded pot that hides who pays and who is paid', 'Fair random payout order', 'Pooled collateral with private refunds'],
   },
   {
     wave: 'Wave 3',
@@ -428,7 +428,7 @@ function FinalCta() {
       <Reveal className="flex flex-col items-start gap-6 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">Start a pot on Preprod.</h2>
-          <p className="mt-3 max-w-[50ch] text-muted">Bring Lace and a few friends. Test tokens are minted in the app.</p>
+          <p className="mt-3 max-w-[50ch] text-muted">Bring a Midnight wallet such as Lace or 1AM, and a few friends with tNIGHT from the Preprod faucet.</p>
         </div>
         <Link to="/app" className={primaryCta}>
           Open app <ArrowRight size={16} weight="bold" />

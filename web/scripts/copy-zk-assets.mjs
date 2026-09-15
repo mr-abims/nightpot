@@ -8,8 +8,8 @@
  * The contract module is copied rather than imported across the repo so that it
  * resolves @midnight-ntwrk/compact-runtime from web/node_modules. Two runtime
  * copies in one bundle means two wasm instances that do not recognise each
- * other's objects. managed/ stays the single source of truth; nothing copied
- * here is committed.
+ * other's objects. managed/ stays the source of truth; the copies are committed
+ * so hosted builds without the Compact compiler can still build the app.
  */
 import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -19,7 +19,14 @@ const web = join(dirname(fileURLToPath(import.meta.url)), '..');
 const managed = join(web, '..', 'managed', 'nightpot');
 
 if (!existsSync(join(managed, 'keys'))) {
-  console.error('managed/nightpot/keys not found. Run `npm run compile` in the repo root first.');
+  // Hosted builds (for example Vercel) have no Compact compiler and no managed/ output.
+  // The compiled assets are committed under public/ and src/generated/, so use those.
+  const committed = [join(web, 'public', 'keys'), join(web, 'public', 'zkir'), join(web, 'src', 'generated', 'nightpot', 'contract')];
+  if (committed.every((dir) => existsSync(dir))) {
+    console.log('managed/nightpot not found; using the committed compiled assets.');
+    process.exit(0);
+  }
+  console.error('managed/nightpot/keys not found and no committed assets. Run `npm run compile` in the repo root first.');
   process.exit(1);
 }
 

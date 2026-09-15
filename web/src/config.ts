@@ -3,9 +3,15 @@ export const GITHUB_URL = 'https://github.com/mr-abims/nightpot';
 export const MIDNIGHT_URL = 'https://midnight.network';
 export const NETWORK_ID = 'preprod' as const;
 
-/** Official Lace site (Input Output); it offers Chrome, Brave, Firefox, and mobile installs. */
-export const LACE_INSTALL_URL = 'https://www.lace.io/';
-/** Chrome Web Store listing linked from lace.io. */
-export const LACE_CHROME_URL = 'https://chromewebstore.google.com/detail/lace/gafhhkghbfjjkeiendhlofajokpaflmk';
-/** Preprod tNIGHT faucet (same endpoint the Node scripts use in src/network.ts). */
-export const PREPROD_FAUCET_URL = 'https://midnight-tmnight-preprod.nethermind.dev';
+/**
+ * Midnight wallets to suggest when none is installed. NightPot works with any
+ * wallet that implements the Midnight DApp Connector API v4; these are the ones
+ * we point people to.
+ */
+export const WALLET_INSTALLS = [
+  { name: 'Lace', url: 'https://www.lace.io/', platforms: 'Chrome, Brave, Firefox' },
+  { name: '1AM', url: 'https://1am.xyz/', platforms: 'Chrome, Firefox, iOS, Android' },
+] as const;
+
+/** Official Midnight Preprod tNIGHT faucet. */
+export const PREPROD_FAUCET_URL = 'https://faucet.preprod.midnight.network';
