@@ -10,7 +10,12 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    // ../src/witnesses.ts is shared with the Node scripts; resolve its imports from web/node_modules,
+    // since hosted builds (Vercel, Root Directory = web) install only the web app's dependencies.
+    "paths": {
+      "@midnight-ntwrk/compact-runtime": ["./node_modules/@midnight-ntwrk/compact-runtime"]
+    }
   },
   "include": ["src"]
 }
